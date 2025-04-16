@@ -96,7 +96,7 @@ def calculate_market_values(current_positions, market_ticker_map, target_date, G
                     if ticker == 'FLOS.L':
                         price_change = 0
                         current_price = 6.37
-                    if position['ccy'] == 'GBP' and ticker != 'INXG.L':
+                    if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L'}:
                         current_price /= 100
                         prev_price /= 100
                         price_change /= 100
