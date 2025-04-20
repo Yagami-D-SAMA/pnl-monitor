@@ -177,7 +177,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             cumulative_fx_contribution = sum(daily_fx_contributions)
             print(f"\n汇总信息:")
             print("-" * 80)
-            print(f"期间累计贡献度: {cumulative_contribution:>15,.2f} bps")
+            print(f"期间累计总贡献度: {cumulative_contribution:>15,.2f} bps")
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
             print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
