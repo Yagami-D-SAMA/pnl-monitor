@@ -123,7 +123,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         
         # 设置文件路径
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        investment_dir = os.path.join(os.path.dirname(base_dir), 'investment')
+        investment_dir = os.path.join(base_dir, 'investment')
         daily_pnl_dir = os.path.join(investment_dir, 'Daily Pnl')
         
         # 存储每日数据
