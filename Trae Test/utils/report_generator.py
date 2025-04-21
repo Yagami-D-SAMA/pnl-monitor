@@ -13,7 +13,7 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     print(f"\n持仓情况 ({latest_date.strftime('%Y-%m-%d')}):")
     print("-" * 320)
     print(f"{'当前市场':<50} {'当前持仓':>10} {'当前价格(LC)':>10} {'成本(GBP)':>10} {'当前市值(GBP)':>15} {'市值占比(%)':>10} {'独立损益(%)':>10} "
-          f"{'累计外汇损益(%)':>15} {'累计外汇损益(GBP)':>15} {'累计盈亏(GBP)':>15}")
+          f"{'累计外汇损益(%)':>15} {'累计外汇损益(GBP)':>15} {'累计盈亏(GBP)':>15} {'总计持有天数':>15}")
     print("-" * 320)
     
     for data in sorted_holdings:
@@ -21,7 +21,7 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
         standalone_bps = data['standalone_bps'] * 100
         print(f"{data['market']:<50} {data['position']:>12.0f} {data['current_price']:>10,.2f} {data['cost']:>15,.2f}GBP"
               f"{data['market_value']:>15,.2f}GBP {market_value_contribution:>10,.2f}% {standalone_bps:>10,.2f}% {data['cumulative_fx_return']:>15,.2f}% "
-              f"{data['cumulative_fx_pnl']:>18,.2f}GBP {data['pnl']:>15,.2f}GBP")
+              f"{data['cumulative_fx_pnl']:>18,.2f}GBP {data['pnl']:>15,.2f}GBP {data['initial_holding_days']:>15} days")
     
     print("-" * 320)
     print(f"总市值: {total_market_value:>15,.2f}")

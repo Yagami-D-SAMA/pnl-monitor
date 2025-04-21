@@ -146,7 +146,7 @@ def calculate_market_values(current_positions, market_ticker_map, target_date, G
                         'cost': position['cost'],
                         'cumulative_fx_return': cumulative_fx_return,
                         'cumulative_fx_pnl': cumulative_fx_pnl,
-                        'holding_days': holding_days,
+                        'initial_holding_days': holding_days,
                         'dividend': dividend
                     })
             except Exception as e:
