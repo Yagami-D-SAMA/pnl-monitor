@@ -13,7 +13,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
 
     # 设置文件路径
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    investment_dir = os.path.join(os.path.dirname(base_dir), 'investment')
+    investment_dir = os.path.join(base_dir, 'investment')
     trade_history_path_SXAFI = os.path.join(investment_dir, 'TradeHistory-SXAFI-(01-03-2017)-(02-03-2025).csv')
     trade_history_path_SX9Q9 = os.path.join(investment_dir, 'TradeHistory-SX9Q9-(03-03-2017)-(02-03-2025).csv')
     enum_path = os.path.join(investment_dir, 'enum.csv')
