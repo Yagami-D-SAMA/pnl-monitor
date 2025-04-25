@@ -80,7 +80,7 @@ def load_historical_pnl(target_date_str, data_source='ALL'):
         
         # 设置文件路径
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        investment_dir = os.path.join(os.path.dirname(base_dir), 'investment')
+        investment_dir = os.path.join(base_dir, 'investment')
         daily_pnl_dir = os.path.join(investment_dir, 'Daily Pnl')
         
         # 构建文件名模式
