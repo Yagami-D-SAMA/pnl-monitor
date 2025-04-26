@@ -54,7 +54,9 @@ def calculate_positions(trades_df):
                 'cost': cost,
                 'ccy': trades_df[trades_df['Market'] == market]['Currency'].iloc[0],
                 'initial_fx_rate': initial_fx_rate,
-                'initial_settlement_date': initial_settlement_date
+                'initial_settlement_date': initial_settlement_date,
+                'last_buy_date': market_trades[market_trades['Direction'] == 'BUY'].iloc[-1]['TextDate'] if len(market_trades[market_trades['Direction'] == 'BUY']) > 0 else None,
+                'trade_price': trades_df[trades_df['Market'] == market]['Price'].iloc[0]
             }
     
     return current_positions
@@ -91,6 +93,9 @@ def calculate_market_values(current_positions, market_ticker_map, target_date, G
                     holding_days = None
                     if position['initial_settlement_date'] is not None:
                         holding_days = (latest_date.date() - position['initial_settlement_date'].date()).days
+                    holding_days_latest = None
+                    if position['last_buy_date'] is not None:
+                        holding_days_latest = (latest_date.date() - position['last_buy_date'].date()).days
                     
                     # 价格调整
                     if ticker == 'FLOS.L':
@@ -146,8 +151,10 @@ def calculate_market_values(current_positions, market_ticker_map, target_date, G
                         'cost': position['cost'],
                         'cumulative_fx_return': cumulative_fx_return,
                         'cumulative_fx_pnl': cumulative_fx_pnl,
-                        'initial_holding_days': holding_days,
-                        'dividend': dividend
+                        'initial_holding_days': holding_days_latest,
+                        'last_buy_date': position['last_buy_date'],
+                        'dividend': dividend,
+                        'trade_price': position['trade_price']
                     })
             except Exception as e:
                 print(f"获取{ticker}数据时发生错误: {e}")
