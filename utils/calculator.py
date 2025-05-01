@@ -30,7 +30,8 @@ def calculate_positions(trades_df):
                     buy_trades.append({
                         'quantity': trade['Quantity'],
                         'cost': trade['Cost/Proceeds'],
-                        'remaining_quantity': trade['Quantity']
+                        'remaining_quantity': trade['Quantity'],
+                        'consideration': trade['Consideration']
                     })
                     position += trade['Quantity']
             else:  # SELL
@@ -47,6 +48,9 @@ def calculate_positions(trades_df):
         cost = sum(-buy_trade['cost'] * (buy_trade['remaining_quantity'] / buy_trade['quantity'])
                    for buy_trade in buy_trades
                    if buy_trade['remaining_quantity'] > 0)
+        consideration = sum(-buy_trade['consideration'] * (buy_trade['remaining_quantity'] / buy_trade['quantity'])
+                   for buy_trade in buy_trades
+                   if buy_trade['remaining_quantity'] > 0)
         
         if position != 0:
             current_positions[market] = {
@@ -56,9 +60,9 @@ def calculate_positions(trades_df):
                 'initial_fx_rate': initial_fx_rate,
                 'initial_settlement_date': initial_settlement_date,
                 'last_buy_date': market_trades[market_trades['Direction'] == 'BUY'].iloc[-1]['TextDate'] if len(market_trades[market_trades['Direction'] == 'BUY']) > 0 else None,
-                'trade_price': trades_df[trades_df['Market'] == market]['Price'].iloc[0]
+                'trade_price': trades_df[trades_df['Market'] == market]['Price'].iloc[0],
+                'consideration': consideration
             }
-    
     return current_positions
 
 def calculate_market_values(current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev):
@@ -130,7 +134,7 @@ def calculate_market_values(current_positions, market_ticker_map, target_date, G
                     if position['ccy'] != 'GBP' and position['initial_fx_rate'] is not None:
                         cumulative_fx_return = ((1/position['initial_fx_rate'])/GBPUSD_FX - 1) * 100
                         if position['ccy'] == 'USD':
-                            cumulative_fx_pnl = market_value * ((1/position['initial_fx_rate'])/GBPUSD_FX - 1)
+                            cumulative_fx_pnl = (position['consideration'] - current_price * position['position'])/GBPUSD_FX - (position['cost'] - market_value)
                     
                     # 更新总计
                     total_market_value += market_value
