@@ -1,9 +1,112 @@
 import pandas as pd
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timedelta
 import os
-import pickle
+from typing import Dict, List, Tuple, Optional, Union
+from .calculator import (
+    calculate_positions,
+    calculate_market_values,
+    calculate_realized_pnl,
+    calculate_global_indices_return
+)
+from .DataLoader import DataLoader
+from .Calculator import Calculator
+from .report_generator import generate_report
 
-def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI') -> object:
+def analyze_portfolio(data_source: str = 'ALL') -> None:
+    """
+    分析投资组合
+    
+    Args:
+        data_source: 数据源，默认为'ALL'
+    """
+    # 设置投资目录
+    investment_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'investment_data')
+    
+    # 检查必要的文件
+    required_files = ['trades.csv', 'market_ticker_map.csv']
+    for file in required_files:
+        if not os.path.exists(os.path.join(investment_dir, file)):
+            raise FileNotFoundError(f"Required file {file} not found in {investment_dir}")
+    
+    # 创建DataLoader实例
+    data_loader = DataLoader(investment_dir)
+    
+    # 加载交易数据
+    trades_df = data_loader.load_trade_data()
+    
+    # 获取市场代码映射
+    market_ticker_map = data_loader.get_market_ticker_mapping()
+    
+    # 计算当前持仓
+    positions = calculate_positions(trades_df)
+    
+    # 获取目标日期
+    target_date = datetime.now()
+    
+    # 获取GBP/USD汇率
+    GBPUSD_FX = 1.25  # 示例值，实际应从数据源获取
+    GBPUSD_FX_prev = 1.24  # 示例值，实际应从数据源获取
+    
+    # 计算市场价值和盈亏
+    daily_pnl_df, total_mv, total_pnl, total_cost, latest_date = calculate_market_values(
+        positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
+    
+    # 计算已实现盈亏
+    markets = list(positions.keys())
+    realized_pnl = calculate_realized_pnl(trades_df, markets)
+    
+    # 计算全球指数回报率
+    indices_returns, indices_dates = calculate_global_indices_return(target_date)
+    
+    # 打印结果
+    print(f"\n投资组合分析结果 ({latest_date.strftime('%Y-%m-%d')}):")
+    print(f"总市值: {total_mv:,.2f}")
+    print(f"总盈亏: {total_pnl:,.2f}")
+    print(f"总成本: {total_cost:,.2f}")
+    print("\n各市场表现:")
+    print(daily_pnl_df.to_string())
+    print("\n已实现盈亏:")
+    for market, pnl in realized_pnl.items():
+        print(f"{market}: {pnl:,.2f}")
+    print("\n全球指数回报率:")
+    for index, ret in indices_returns.items():
+        print(f"{index}: {ret:.2f}%")
+
+def load_historical_pnl(target_date: str, data_source: str = 'ALL') -> None:
+    """
+    加载历史盈亏数据
+    
+    Args:
+        target_date: 目标日期
+        data_source: 数据源，默认为'ALL'
+    """
+    # 实现历史盈亏数据加载逻辑
+    pass
+
+def calculate_cumulative_contribution(start_date: str, end_date: str, data_source: str = 'ALL') -> None:
+    """
+    计算累计贡献度
+    
+    Args:
+        start_date: 开始日期
+        end_date: 结束日期
+        data_source: 数据源，默认为'ALL'
+    """
+    # 实现累计贡献度计算逻辑
+    pass
+
+def run_historical_analysis(target_date: str) -> None:
+    """
+    运行历史分析
+    
+    Args:
+        target_date: 目标日期
+    """
+    # 实现历史分析逻辑
+    pass
+
+def analyze_portfolio_old(target_date: object = None, data_source: object = 'SXAFI') -> object:
     """主函数：分析投资组合"""
     # 设置目标日期
     if target_date is None:
@@ -14,106 +117,64 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
     # 设置文件路径
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     investment_dir = os.path.join(base_dir, 'investment')
-    trade_history_path_SXAFI = os.path.join(investment_dir, 'TradeHistory-SXAFI-(01-03-2017)-(02-03-2025).csv')
-    trade_history_path_SX9Q9 = os.path.join(investment_dir, 'TradeHistory-SX9Q9-(03-03-2017)-(02-03-2025).csv')
-    enum_path = os.path.join(investment_dir, 'enum.csv')
     
-    # 确定要处理的文件
-    trade_history_paths = []
-    if data_source == 'SXAFI':
-        trade_history_paths.append(trade_history_path_SXAFI)
-    elif data_source == 'SX9Q9':
-        trade_history_paths.append(trade_history_path_SX9Q9)
-    elif data_source == 'ALL':
-        trade_history_paths.extend([trade_history_path_SXAFI, trade_history_path_SX9Q9])
+    # 根据数据源选择交易历史文件
+    if data_source == 'ALL':
+        trade_history_paths = [
+            os.path.join(investment_dir, 'TradeHistory-SXAFI-(01-03-2017)-(02-03-2025).csv'),
+            os.path.join(investment_dir, 'TradeHistory-SX9Q9-(03-03-2017)-(02-03-2025).csv')
+        ]
     else:
-        print(f"错误：无效的数据源选择 {data_source}，请使用 'SXAFI'、'SX9Q9' 或 'ALL'")
-        return
+        trade_history_paths = [os.path.join(investment_dir, f'TradeHistory-{data_source}-(01-03-2017)-(02-03-2025).csv')]
+    
+    enum_path = os.path.join(investment_dir, 'enum.csv')
     
     # 检查文件是否存在
     for path in trade_history_paths:
         if not os.path.exists(path):
-            print(f"错误：无法找到交易历史文件 - {path}")
+            print(f"错误：交易历史文件不存在 - {path}")
             return
     if not os.path.exists(enum_path):
-        print(f"错误：无法找到枚举文件 - {enum_path}")
+        print(f"错误：枚举文件不存在 - {enum_path}")
         return
     
     try:
-        # 加载数据
-        from . import load_trade_data, get_market_ticker_map, get_fx_rates, save_results
-        from . import calculate_positions, calculate_market_values, calculate_realized_pnl
-        from . import generate_report
+        # 创建DataLoader和Calculator实例
+        data_loader = DataLoader(investment_dir)
+        calculator = Calculator()
         
-        trades_df, enum_df = load_trade_data(trade_history_paths, enum_path, target_date)
+        # 加载数据
+        trades_df, enum_df = data_loader.load_trade_data(trade_history_paths, enum_path, target_date)
         if trades_df is None or enum_df is None:
             return
+            
         # 获取市场和ticker映射
-        market_ticker_map = get_market_ticker_map(trades_df, enum_df)
+        market_ticker_map = data_loader.get_market_ticker_map()
+        
         # 计算持仓
-        current_positions = calculate_positions(trades_df)
+        current_positions = calculator.calculate_positions(trades_df)
+        
         # 获取汇率数据
-        GBPUSD_FX, GBPUSD_FX_prev = get_fx_rates(target_date)
-        # GBPUSD_FX_prev = 1 / GBPUSD_FX_prev
-        # GBPUSD_FX = 1 / GBPUSD_FX
+        GBPUSD_FX, GBPUSD_FX_prev = DataLoader.get_fx_rates(target_date)
+        
         # 计算市场价值和盈亏
-        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date = calculate_market_values(
+        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date = calculator.calculate_market_values(
             current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
 
         # 计算已实现盈亏
-        realized_pnl = calculate_realized_pnl(trades_df, trades_df['Market'].unique())
+        realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique())
+        
         # 生成报告
         daily_pnl_result = generate_report(
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date)
+            
         # 保存结果
-        save_results(daily_pnl_result, investment_dir, trade_history_paths)
+        data_loader.save_results(daily_pnl_result, trade_history_paths)
         
     except Exception as e:
         print(f"分析过程中发生错误: {e}")
 
-def load_historical_pnl(target_date_str, data_source='ALL'):
-    """加载指定日期的PnL数据"""
-    try:
-        # 转换日期格式
-        target_date = datetime.strptime(target_date_str, '%Y-%m-%d')
-        formatted_date = target_date.strftime('%Y%m%d')
-        
-        # 设置文件路径
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        investment_dir = os.path.join(base_dir, 'investment')
-        daily_pnl_dir = os.path.join(investment_dir, 'Daily Pnl')
-        
-        # 构建文件名模式
-        if data_source == 'ALL':
-            file_pattern = f'daily_pnl_SXAFI_SX9Q9_{formatted_date}.pkl'
-        else:
-            file_pattern = f'daily_pnl_{data_source}_{formatted_date}.pkl'
-        
-        pnl_file = os.path.join(daily_pnl_dir, file_pattern)
-        
-        if not os.path.exists(pnl_file):
-            print(f"错误：找不到{target_date_str}的PnL数据文件")
-            return
-        
-        # 读取pkl文件
-        with open(pnl_file, 'rb') as f:
-            daily_pnl_result = pickle.load(f)
-        
-        # 生成报告
-        from . import generate_report
-        
-        market_details = daily_pnl_result['market_details']
-        total_market_value = daily_pnl_result['total_market_value']
-        total_cost = sum(data['cost'] for data in market_details)
-        total_pnl = sum(data['pnl'] for data in market_details)
-        realized_pnl = daily_pnl_result['realized_pnl']  # 历史数据中没有已实现盈亏信息
-        
-        generate_report(market_details, total_market_value, total_pnl, total_cost, realized_pnl, daily_pnl_result['date'])
-        
-    except Exception as e:
-        print(f"加载历史数据时发生错误: {e}")
-
-def calculate_cumulative_contribution(start_date_str, end_date_str, data_source='ALL'):
+def calculate_cumulative_contribution_old(start_date_str, end_date_str, data_source='ALL'):
     """计算指定日期范围内的累计贡献度和盈亏"""
     try:
         # 转换日期格式
@@ -189,7 +250,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
     except Exception as e:
         print(f"计算累计贡献度时发生错误: {e}")
 
-def run_historical_analysis(start_date_str='2025-01-01', end_date_str = '2025-01-02'):
+def run_historical_analysis_old(start_date_str='2025-01-01', end_date_str = '2025-01-02'):
     """运行历史分析，从指定日期到今天之前的所有工作日"""
     try:
         # 转换日期格式
