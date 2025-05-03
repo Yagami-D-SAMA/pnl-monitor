@@ -42,13 +42,11 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
 
     try:
         # 加载数据
-        # from . import load_trade_data, get_market_ticker_map, get_fx_rates, save_results
         from . import calculate_positions, calculate_market_values, calculate_realized_pnl
         from . import generate_report
         from . import DataLoader
         data_loader = DataLoader(investment_dir)
         trades_df, enum_df = data_loader.load_trade_data(trade_history_paths, enum_path, target_date)
-        # trades_df, enum_df = load_trade_data(trade_history_paths, enum_path, target_date)
         if trades_df is None or enum_df is None:
             return
         # 获取市场和ticker映射
@@ -62,7 +60,6 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
         # 计算市场价值和盈亏
         daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date = calculate_market_values(
             current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
-
         # 计算已实现盈亏
         realized_pnl = calculate_realized_pnl(trades_df, trades_df['Market'].unique())
         # 生成报告
