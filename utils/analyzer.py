@@ -42,9 +42,9 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
 
     try:
         # 加载数据
-        from . import calculate_positions, calculate_market_values, calculate_realized_pnl
         from . import generate_report
         from . import DataLoader
+        from . import Calculator
         data_loader = DataLoader(investment_dir)
         trades_df, enum_df = data_loader.load_trade_data(trade_history_paths, enum_path, target_date)
         if trades_df is None or enum_df is None:
@@ -52,16 +52,17 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
         # 获取市场和ticker映射
         market_ticker_map = data_loader.get_market_ticker_map()
         # 计算持仓
-        current_positions = calculate_positions(trades_df)
+        calculator = Calculator()
+        current_positions = calculator.calculate_positions(trades_df)
         # 获取汇率数据
         GBPUSD_FX, GBPUSD_FX_prev = data_loader.get_fx_rates(target_date)
         # GBPUSD_FX_prev = 1 / GBPUSD_FX_prev
         # GBPUSD_FX = 1 / GBPUSD_FX
         # 计算市场价值和盈亏
-        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date = calculate_market_values(
+        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date = calculator.calculate_market_values(
             current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
         # 计算已实现盈亏
-        realized_pnl = calculate_realized_pnl(trades_df, trades_df['Market'].unique())
+        realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique())
         # 生成报告
         daily_pnl_result = generate_report(
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date)

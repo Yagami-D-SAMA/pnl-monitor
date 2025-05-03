@@ -5,13 +5,8 @@ from .analyzer import (
     run_historical_analysis
 )
 
-from .calculator import (
-    calculate_positions,
-    calculate_market_values,
-    calculate_realized_pnl,
-    calculate_global_indices_return
-)
 
+from .Calculator import Calculator
 from .report_generator import generate_report
 from .DataLoader import DataLoader
 
@@ -20,10 +15,6 @@ __all__ = [
     'load_historical_pnl',
     'calculate_cumulative_contribution',
     'run_historical_analysis',
-    'calculate_positions',
-    'calculate_market_values',
-    'calculate_realized_pnl',
-    'calculate_global_indices_return',
     'generate_report',
     'DataLoader'
 ] 
