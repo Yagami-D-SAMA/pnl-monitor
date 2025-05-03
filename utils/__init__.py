@@ -12,6 +12,7 @@ from .calculator import (
     calculate_global_indices_return
 )
 
+from .report_generator import generate_report
 from .DataLoader import DataLoader
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     'calculate_market_values',
     'calculate_realized_pnl',
     'calculate_global_indices_return',
+    'generate_report',
     'DataLoader'
 ] 
