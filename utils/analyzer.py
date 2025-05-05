@@ -2,9 +2,10 @@ import pandas as pd
 from datetime import datetime
 import os
 import pickle
+from tabulate import tabulate
 
 
-def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI') -> object:
+def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI', asset_type: bool = True) -> object:
     """主函数：分析投资组合"""
     # 设置目标日期
     if target_date is None:
@@ -63,6 +64,13 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI')
             current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
         # 计算已实现盈亏
         realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique())
+        if asset_type:
+            asset_type_pct = calculator.asset_type_calc(daily_pnl_data)
+            table_data = [
+                [entry['asset_type'], f"{entry['percentage'] * 100:.2f}%"]
+                for entry in asset_type_pct
+            ]
+            print(tabulate(table_data, headers=["Asset Type", "Market Value %"], tablefmt="fancy_grid"))
         # 生成报告
         daily_pnl_result = generate_report(
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date)

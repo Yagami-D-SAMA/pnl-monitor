@@ -83,7 +83,8 @@ class Calculator:
                     'last_buy_date': market_trades[market_trades['Direction'] == 'BUY'].iloc[-1]['TextDate'] if len(
                         market_trades[market_trades['Direction'] == 'BUY']) > 0 else None,
                     'trade_price': trades_df[trades_df['Market'] == market]['Price'].iloc[0],
-                    'consideration': consideration
+                    'consideration': consideration,
+                    'asset_type': trades_df[trades_df['Market'] == market]['AssetType'].iloc[0]
                 }
         return current_positions
     
@@ -197,7 +198,8 @@ class Calculator:
                             'initial_holding_days': holding_days_latest,
                             'last_buy_date': position['last_buy_date'],
                             'dividend': dividend,
-                            'trade_price': position['trade_price']
+                            'trade_price': position['trade_price'],
+                            'asset_type': position['asset_type']
                         })
                 except Exception as e:
                     print(f"获取{ticker}数据时发生错误: {e}")
@@ -309,6 +311,21 @@ class Calculator:
 
         return results, latest_dates
 
+    @staticmethod
+    def asset_type_calc(daily_pnl):
+        from collections import defaultdict
+        asset_totals = defaultdict(float)
+        total_market_value = 0.0
+        for entry in daily_pnl:
+            asset_type = entry['asset_type']
+            market_value = entry['market_value']
+            asset_totals[asset_type] += market_value
+            total_market_value += market_value
+        asset_type_pct = []
+        for asset_type, value in asset_totals.items():
+            pct = value / total_market_value if total_market_value != 0 else 0
+            asset_type_pct.append({'asset_type': asset_type, 'percentage': pct})
+        return asset_type_pct
 
 if __name__ == "__main__":
     # 测试计算功能
