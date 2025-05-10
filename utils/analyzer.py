@@ -3,6 +3,7 @@ from datetime import datetime
 import os
 import pickle
 from tabulate import tabulate
+import yfinance as yf
 
 
 def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI', asset_type: bool = True) -> object:
@@ -148,6 +149,39 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         # 存储所有日期的数据
         all_daily_data = []
 
+        # 定义指数列表
+        indices = {
+            "S&P 500": "^GSPC",
+            "Dow Jones": "^DJI",
+            "Nasdaq 100": "^NDX",
+            "Russell 2000": "^RUT",
+            "Euro Stoxx 50": "^STOXX50E",
+            "DAX (Germany)": "^GDAXI",
+            "FTSE 100 (UK)": "^FTSE",
+            "Nikkei 225 (Japan)": "^N225",
+            "Hang Seng Index (Hong Kong)": "^HSI",
+            "SSE Composite (Shanghai)": "000001.SS",
+            "Nifty 50 (India)": "^NSEI",
+            "Bovespa (Brazil)": "^BVSP"
+        }
+        # 计算指数累计回报率
+        index_returns = {}
+        for index_name, ticker in indices.items():
+            try:
+                index = yf.Ticker(ticker)
+                hist_data = index.history(start=start_date - pd.Timedelta(days=1), end=end_date + pd.Timedelta(days=1))
+                
+                if len(hist_data.index) >= 2:
+                    start_price = float(hist_data.loc[hist_data.index[0], 'Close'])
+                    end_price = float(hist_data.loc[hist_data.index[-1], 'Close'])
+                    total_return = ((end_price / start_price) - 1) * 100
+                    index_returns[index_name] = total_return
+                else:
+                    index_returns[index_name] = None
+            except Exception as e:
+                print(f"获取{index_name}指数数据时发生错误: {e}")
+                index_returns[index_name] = None
+
         print(f"\n{start_date_str}至{end_date_str}的盈亏分析:")
         print("-" * 120)
         print(f"{'日期':<12} {'当日贡献度(bps)':>15} {'当日总盈亏(GBP)':>15} {'当日外汇盈亏(GBP)':>15} "
@@ -213,6 +247,18 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
             print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
+            print("-" * 80)
+            
+            # 打印指数累计回报率
+            print("\n全球主要指数累计回报率:")
+            print("-" * 80)
+            print(f"{'指数名称':<30} {'累计回报率(%)':>15}")
+            print("-" * 80)
+            for index_name, return_rate in sorted(index_returns.items(), key=lambda x: x[1] if x[1] is not None else float('-inf'), reverse=True):
+                if return_rate is not None:
+                    print(f"{index_name:<30} {return_rate:>15,.2f}")
+                else:
+                    print(f"{index_name:<30} {'N/A':>15}")
             print("-" * 80)
         else:
             print("在指定日期范围内没有找到数据")
