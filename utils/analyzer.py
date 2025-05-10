@@ -144,6 +144,9 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         total_pnl = 0
         total_fx_pnl = 0
         total_non_fx_pnl = 0
+        
+        # 存储所有日期的数据
+        all_daily_data = []
 
         print(f"\n{start_date_str}至{end_date_str}的盈亏分析:")
         print("-" * 120)
@@ -178,12 +181,27 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
                     total_pnl += daily_pnl_result['total_daily_pnl']
                     total_fx_pnl += daily_pnl_result['total_fx_pnl']
                     total_non_fx_pnl += daily_pnl_result['total_non_fx_pnl']
+                    
+                    # 存储每日数据
+                    all_daily_data.append({
+                        'date': date,
+                        'contribution': contribution,
+                        'total_daily_pnl': daily_pnl_result['total_daily_pnl'],
+                        'total_fx_pnl': daily_pnl_result['total_fx_pnl'],
+                        'total_non_fx_pnl': daily_pnl_result['total_non_fx_pnl'],
+                        'total_market_value': daily_pnl_result['total_market_value']
+                    })
 
-                    print(f"{date.strftime('%Y-%m-%d'):<12} {contribution:>15,.2f} "
-                          f"{daily_pnl_result['total_daily_pnl']:>15,.2f} "
-                          f"{daily_pnl_result['total_fx_pnl']:>20,.2f} "
-                          f"{daily_pnl_result['total_non_fx_pnl']:>20,.2f} "
-                          f"{daily_pnl_result['total_market_value']:>20,.2f}")
+        # 只显示最近10天的数据
+        recent_data = all_daily_data[-10:] if len(all_daily_data) > 10 else all_daily_data
+        
+        # 打印最近10天的数据
+        for data in recent_data:
+            print(f"{data['date'].strftime('%Y-%m-%d'):<12} {data['contribution']:>15,.2f} "
+                  f"{data['total_daily_pnl']:>15,.2f} "
+                  f"{data['total_fx_pnl']:>20,.2f} "
+                  f"{data['total_non_fx_pnl']:>20,.2f} "
+                  f"{data['total_market_value']:>20,.2f}")
 
         print("-" * 120)
         if daily_contributions:
@@ -195,7 +213,6 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
             print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
-            # print(f"期间非外汇盈亏: {total_non_fx_pnl:>15,.2f} GBP")
             print("-" * 80)
         else:
             print("在指定日期范围内没有找到数据")
