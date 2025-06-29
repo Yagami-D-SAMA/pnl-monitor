@@ -157,6 +157,8 @@ class Calculator:
                             fx_change = (1 / GBPUSD_FX - 1 / GBPUSD_FX_prev)
                             fx_pnl = (current_price * position['position']) * fx_change
                             daily_pnl = non_fx_pnl + fx_pnl
+                            # fx_change_perc = GBPUSD_FX_prev/GBPUSD_FX - 1
+                            # price_change_perc = price_change / prev_price
                         else:
                             market_value = current_price * position['position']
                             daily_pnl = price_change * position['position']
@@ -165,7 +167,7 @@ class Calculator:
 
                         pnl = market_value - position['cost']
                         # 计算bps时也要考虑分红的影响
-                        bps_change = ((price_change) / prev_price) * 10000
+                        bps_change = (price_change / prev_price) * 10000
 
                         # 计算累计外汇盈亏
                         cumulative_fx_return = 0
@@ -222,8 +224,8 @@ class Calculator:
             market_trades = trades_df[trades_df['Market'] == market]
             closed_positions = market_trades[market_trades['Direction'] == 'SELL']
             if any(closed_positions['Activity'] == 'CORPORATE ACTION'):
+                closed_positions = closed_positions[closed_positions['Activity'] != 'CORPORATE ACTION']
                 print(f"{market}市场存在Corporate actions，跳过pnl计算")
-                continue
 
             if not closed_positions.empty:
                 trade_pnl = 0
@@ -231,10 +233,12 @@ class Calculator:
                     (market_trades['TextDate'] <= closed_positions['TextDate'].max()) &
                     (market_trades['Direction'] == 'BUY')
                     ].sort_values('TextDate')
-
                 if buy_trades.empty:
                     continue
-
+                if any(buy_trades['Activity'] == 'CORPORATE ACTION'):
+                    valid_quantities = buy_trades.loc[buy_trades['Activity'] == 'CORPORATE ACTION', 'Quantity'].iloc[0]
+                    buy_trades['Quantity'] = valid_quantities
+                    buy_trades = buy_trades[buy_trades['Activity'] != 'CORPORATE ACTION']
                 remaining_quantity = -closed_positions['Quantity'].sum()
                 for _, buy_trade in buy_trades.iterrows():
                     if remaining_quantity <= 0:

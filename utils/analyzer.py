@@ -304,6 +304,41 @@ def run_historical_analysis(start_date_str='2025-01-01', end_date_str='2025-01-0
         print(f"运行历史分析时发生错误: {e}")
 
 
+def stock_monitor():
+    """
+    监控watchlist中的股票，计算50天和200天均线，判断当前价位高低。
+    """
+    import_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    watchlist_path = os.path.join(import_path, 'investment', 'watchlist.pkl')
+    if not os.path.exists(watchlist_path):
+        print("未找到watchlist.pkl，请先创建watchlist。")
+        return
+    with open(watchlist_path, 'rb') as f:
+        watchlist = pickle.load(f)
+    print("\n股票监控结果：")
+    print("股票\t当前价\t50日均线\t200日均线\t状态")
+    for symbol in watchlist:
+        try:
+            data = yf.download(symbol, period="250d")
+            if data.empty or len(data) < 200:
+                print(f"{symbol}\t数据不足，无法计算均线")
+                continue
+            close = data['Close']
+            ma50 = close.rolling(window=50).mean().iloc[-1].item()
+            ma200 = close.rolling(window=200).mean().iloc[-1].item()
+            current = close.iloc[-1].item()
+
+            if current > ma50 and current > ma200:
+                status = "高于均线"
+            elif current < ma50 and current < ma200:
+                status = "低于均线"
+            else:
+                status = "区间波动"
+            print(f"{symbol}\t{current:.2f}\t{ma50:.2f}\t{ma200:.2f}\t{status}")
+        except Exception as e:
+            print(f"{symbol}\t获取数据出错: {e}")
+
+
 if __name__ == "__main__":
     # 测试分析功能
     print("测试分析模块")
