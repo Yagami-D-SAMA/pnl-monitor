@@ -7,7 +7,7 @@ import os
 
 def create_watchlist():
     """创建包含指定股票的watch list"""
-    watchlist = ['NFLX', 'WMT', 'TSLA', 'GOOG', 'AMD']
+    watchlist = ['NFLX', 'WMT', 'TSLA', 'GOOG', 'AMD', 'CNA.L', 'UBER', 'NIO']
     
     # 获取当前脚本所在目录
     script_dir = os.path.dirname(os.path.abspath(__file__))

@@ -18,9 +18,9 @@ if __name__ == "__main__":
     # 2. 股票均线监控
     # stock_monitor()
     # 3. 查看历史PnL
-    # load_historical_pnl('2025-06-16', data_source='ALL')
+    # load_historical_pnl('2025-07-03', data_source='ALL')
     # 4. 计算累计贡献度
-    # calculate_cumulative_contribution('2025-01-01', '2025-06-28', data_source='ALL')
+    # calculate_cumulative_contribution('2025-01-01', '2025-07-11', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2025-05-26', '2025-05-30')
 

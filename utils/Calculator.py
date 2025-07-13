@@ -133,17 +133,11 @@ class Calculator:
                         price_change = (current_price - prev_price + dividend)
 
                         # 计算持有时间
-                        holding_days = None
-                        if position['initial_settlement_date'] is not None:
-                            holding_days = (latest_date.date() - position['initial_settlement_date'].date()).days
                         holding_days_latest = None
                         if position['last_buy_date'] is not None:
                             holding_days_latest = (latest_date.date() - position['last_buy_date'].date()).days
 
                         # 价格调整
-                        if ticker == 'FLOS.L':
-                            price_change = 0
-                            current_price = 6.37
                         if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L'}:
                             current_price /= 100
                             prev_price /= 100
@@ -157,8 +151,6 @@ class Calculator:
                             fx_change = (1 / GBPUSD_FX - 1 / GBPUSD_FX_prev)
                             fx_pnl = (current_price * position['position']) * fx_change
                             daily_pnl = non_fx_pnl + fx_pnl
-                            # fx_change_perc = GBPUSD_FX_prev/GBPUSD_FX - 1
-                            # price_change_perc = price_change / prev_price
                         else:
                             market_value = current_price * position['position']
                             daily_pnl = price_change * position['position']
