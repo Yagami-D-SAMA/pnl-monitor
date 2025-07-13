@@ -110,7 +110,7 @@ class DataLoader:
         daily_pnl_dir = os.path.join(self.investment_dir, 'Daily Pnl')
         os.makedirs(daily_pnl_dir, exist_ok=True)
         
-        source_prefix = '_'.join(path.split('TradeHistory-')[1].split('-')[0] for path in trade_history_paths)
+        source_prefix = '_'.join(path.split('TradeHistory-')[1].split('.')[0] for path in trade_history_paths)
         pnl_file = os.path.join(daily_pnl_dir, 
                                f'daily_pnl_{source_prefix}_{daily_pnl_result["date"].strftime("%Y%m%d")}.pkl')
         
