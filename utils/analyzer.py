@@ -6,7 +6,7 @@ from tabulate import tabulate
 import yfinance as yf
 
 
-def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI', asset_type: bool = True) -> object:
+def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True) -> object:
     """主函数：分析投资组合"""
     # 设置目标日期
     if target_date is None:
@@ -61,7 +61,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI',
         # GBPUSD_FX_prev = 1 / GBPUSD_FX_prev
         # GBPUSD_FX = 1 / GBPUSD_FX
         # 计算市场价值和盈亏
-        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date = calculator.calculate_market_values(
+        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl = calculator.calculate_market_values(
             current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
         # 计算已实现盈亏
         realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique())
@@ -74,7 +74,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = 'SXAFI',
             print(tabulate(table_data, headers=["Asset Type", "Market Value %"], tablefmt="fancy_grid"))
         # 生成报告
         daily_pnl_result = generate_report(
-            daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date)
+            daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl)
         # 保存结果
         data_loader.save_results(daily_pnl_result, trade_history_paths)
 
@@ -241,12 +241,18 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         if daily_contributions:
             cumulative_contribution = sum(daily_contributions)
             cumulative_fx_contribution = sum(daily_fx_contributions)
+            days_held = (end_date - start_date).days
+            T = days_held / 365.25
+            annualized_return = ((1 + cumulative_contribution/10000) ** (1 / T) - 1) * 100# accounting for leap years
             print(f"\n汇总信息:")
             print("-" * 80)
             print(f"期间累计总贡献度: {cumulative_contribution:>15,.2f} bps")
+            print(f"年化总贡献度: {annualized_return:>15,.2f}%")
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
+            print(f"期间非外汇累计贡献度: {cumulative_contribution - cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
             print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
+            print(f"期间非外汇盈亏: {total_pnl - total_fx_pnl:>18,.2f} GBP")
             print("-" * 80)
             
             # 打印指数累计回报率
@@ -304,39 +310,108 @@ def run_historical_analysis(start_date_str='2025-01-01', end_date_str='2025-01-0
         print(f"运行历史分析时发生错误: {e}")
 
 
-def stock_monitor():
+def stock_monitor(days=30):
     """
-    监控watchlist中的股票，计算50天和200天均线，判断当前价位高低。
+    监控watchlist中的股票，计算指定天数的投资组合PnL
+    
+    Args:
+        days: 要分析的天数，默认30天
     """
     import_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     watchlist_path = os.path.join(import_path, 'investment', 'watchlist.pkl')
+    
     if not os.path.exists(watchlist_path):
         print("未找到watchlist.pkl，请先创建watchlist。")
         return
+    
+    # 读取watchlist分配
     with open(watchlist_path, 'rb') as f:
-        watchlist = pickle.load(f)
-    print("\n股票监控结果：")
-    print("股票\t当前价\t50日均线\t200日均线\t状态")
-    for symbol in watchlist:
+        stock_allocations = pickle.load(f)
+    
+    print(f"\n投资组合监控结果 (过去{days}天):")
+    print("=" * 80)
+    
+    # 计算总名义金额
+    total_notional = sum(data['notional_allocation'] for data in stock_allocations.values())
+    print(f"总名义金额: {total_notional:,.2f}")
+    print("=" * 80)
+    
+    # 存储每个股票的数据
+    portfolio_data = {}
+    total_pnl = 0
+    total_return = 0
+    
+    # 获取GBPUSD汇率数据
+    try:
+        gbpusd_stock = yf.Ticker("GBPUSD=X")
+        gbpusd_data = gbpusd_stock.history(start=(datetime.today() - pd.Timedelta(days=days + 10)), end=datetime.today())
+        if not gbpusd_data.empty:
+            gbpusd_start = gbpusd_data['Close'].iloc[0].item()
+            gbpusd_end = gbpusd_data['Close'].iloc[-1].item()
+            gbpusd_change = gbpusd_end - gbpusd_start
+            gbpusd_return = (gbpusd_end / gbpusd_start - 1) * 100
+            print(f"GBPUSD: {gbpusd_start:.4f} → {gbpusd_end:.4f} {gbpusd_change:>+8.4f} ({gbpusd_return:>+6.2f}%)")
+        else:
+            print("GBPUSD: 无法获取汇率数据")
+    except Exception as e:
+        print(f"GBPUSD: 获取汇率数据出错: {e}")
+    
+    print("-" * 80)
+    
+    for symbol, allocation_data in stock_allocations.items():
         try:
-            data = yf.download(symbol, period="250d")
-            if data.empty or len(data) < 200:
-                print(f"{symbol}\t数据不足，无法计算均线")
-                continue
-            close = data['Close']
-            ma50 = close.rolling(window=50).mean().iloc[-1].item()
-            ma200 = close.rolling(window=200).mean().iloc[-1].item()
-            current = close.iloc[-1].item()
-
-            if current > ma50 and current > ma200:
-                status = "高于均线"
-            elif current < ma50 and current < ma200:
-                status = "低于均线"
-            else:
-                status = "区间波动"
-            print(f"{symbol}\t{current:.2f}\t{ma50:.2f}\t{ma200:.2f}\t{status}")
+            # 获取历史价格数据
+            stock = yf.Ticker(symbol)
+            hist_data = stock.history(start=(datetime.today() - pd.Timedelta(days=days + 10)), end=datetime.today())
+            
+            # 计算价格变化
+            start_price = hist_data['Close'].iloc[0].item()
+            end_price = hist_data['Close'].iloc[-1].item()
+            price_change = end_price - start_price
+            price_return = (end_price / start_price - 1) * 100
+            
+            # 计算该股票的PnL
+            stock_pnl = price_change * (allocation_data['notional_allocation'] / start_price)
+            stock_return = price_return * allocation_data['weight']
+            
+            portfolio_data[symbol] = {
+                'start_price': start_price,
+                'end_price': end_price,
+                'price_change': price_change,
+                'price_return': price_return,
+                'allocation': allocation_data['notional_allocation'],
+                'weight': allocation_data['weight'],
+                'pnl': stock_pnl,
+                'return_contribution': stock_return
+            }
+            
+            total_pnl += stock_pnl
+            total_return += stock_return
+            
+            print(f"{symbol:<10} {start_price:>8.2f} → {end_price:>8.2f} "
+                  f"{price_change:>+8.2f} ({price_return:>+6.2f}%) "
+                  f"PnL: {stock_pnl:>10.2f} "
+                  f"权重: {allocation_data['weight']:>6.3f}")
+                  
         except Exception as e:
-            print(f"{symbol}\t获取数据出错: {e}")
+            print(f"{symbol:<10} 获取数据出错: {e}")
+    
+    print("=" * 80)
+    print(f"投资组合总PnL: {total_pnl:>10.2f}")
+    print(f"投资组合总回报: {total_return:>+6.2f}%")
+    print(f"年化回报率: {(total_return / days * 365):>+6.2f}%")
+    print("=" * 80)
+    
+    # 按PnL贡献排序
+    if portfolio_data:
+        print("\n按PnL贡献排序:")
+        sorted_stocks = sorted(portfolio_data.items(), key=lambda x: x[1]['pnl'], reverse=True)
+        print(f"{'股票':<10} {'PnL':<12} {'回报贡献':<12} {'权重':<8}")
+        print("-" * 50)
+        for symbol, data in sorted_stocks:
+            print(f"{symbol:<10} {data['pnl']:<12.2f} {data['return_contribution']:<+12.2f}% {data['weight']:<8.3f}")
+    
+    return portfolio_data, total_pnl, total_return
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date):
+def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl):
     """生成报告"""
     # 获取全球指数回报率
     # from . import calculate_global_indices_return
@@ -76,6 +76,14 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     print(f"{'当日非外汇盈亏:':<6} {sum(data['non_fx_pnl'] for data in daily_pnl_data):.2f}GBP")
     print(f"{'当日总市值:':<10} {total_market_value:,.2f}GBP")
 
+    # 添加region_pnl展示
+    if region_pnl:
+        print("\nRegion PnL Summary:")
+        print("-" * 40)
+        for region, pnl in region_pnl.items():
+            print(f"Region: {region:<20} PnL: {pnl:>12,.2f} GBP")
+        print("-" * 40)
+    
     # 添加全球指数对比信息
     # print("\n全球主要指数对比分析:")
     # print("-" * 100)

@@ -1,8 +1,9 @@
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import os
+from datetime import datetime
 import yfinance as yf
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple
+from collections import defaultdict
 
 class Calculator:
     """
@@ -84,25 +85,26 @@ class Calculator:
                         market_trades[market_trades['Direction'] == 'BUY']) > 0 else None,
                     'trade_price': trades_df[trades_df['Market'] == market]['Price'].iloc[0],
                     'consideration': consideration,
-                    'asset_type': trades_df[trades_df['Market'] == market]['AssetType'].iloc[0]
+                    'asset_type': trades_df[trades_df['Market'] == market]['AssetType'].iloc[0],
+                    'regions': trades_df[trades_df['Market'] == market]['Region'].iloc[0]
                 }
         return current_positions
-    
-    def calculate_market_values(self, current_positions: Dict[str, Dict[str, float]], 
-                              market_ticker_map: Dict[str, str], 
-                              target_date: datetime, 
-                              GBPUSD_FX: float, 
+
+    def calculate_market_values(self, current_positions: Dict[str, Dict[str, float]],
+                              market_ticker_map: Dict[str, str],
+                              target_date: datetime,
+                              GBPUSD_FX: float,
                               GBPUSD_FX_prev: float) -> Tuple[List[Dict], float, float, float, datetime]:
         """
         计算市场价值和盈亏
-        
+
         Args:
             current_positions: 当前持仓信息
             market_ticker_map: 市场代码映射
             target_date: 目标日期
             GBPUSD_FX: 当前GBP/USD汇率
             GBPUSD_FX_prev: 前一日GBP/USD汇率
-            
+
         Returns:
             (每日盈亏数据, 总市值, 总盈亏, 总成本, 最新日期)
         """
@@ -193,21 +195,26 @@ class Calculator:
                             'last_buy_date': position['last_buy_date'],
                             'dividend': dividend,
                             'trade_price': position['trade_price'],
-                            'asset_type': position['asset_type']
+                            'asset_type': position['asset_type'],
+                            'region': position['regions']
                         })
                 except Exception as e:
                     print(f"获取{ticker}数据时发生错误: {e}")
+        region_pnl = defaultdict(float)
+        for entry in daily_pnl_data:
+            region_pnl[entry['region']] += entry['daily_pnl']
+        region_pnl = dict(region_pnl)
 
-        return daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date
-    
+        return daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl
+
     def calculate_realized_pnl(self, trades_df: pd.DataFrame, markets: List[str]) -> float:
         """
         计算已实现盈亏
-        
+
         Args:
             trades_df: 交易数据DataFrame
             markets: 市场列表
-            
+
         Returns:
             已实现盈亏
         """
@@ -253,14 +260,14 @@ class Calculator:
                 realized_pnl += trade_pnl
 
         return realized_pnl
-    
+
     def calculate_global_indices_return(self, target_date: datetime) -> Tuple[Dict[str, float], Dict[str, datetime]]:
         """
         计算全球主要指数的当日回报率
-        
+
         Args:
             target_date: 目标日期
-            
+
         Returns:
             (指数回报率字典, 最新日期字典)
         """
