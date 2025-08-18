@@ -14,13 +14,13 @@ from utils.analyzer import (
 if __name__ == "__main__":
     # 用法示例：
     # 1. 计算今日PnL
-    # analyze_portfolio(data_source='ALL', asset_type=True)
+    analyze_portfolio(data_source='ALL', asset_type=True)
     # 2. 股票均线监控
-    stock_monitor()
+    # stock_monitor(2)
     # 3. 查看历史PnL
-    # load_historical_pnl('2023-05-18', data_source='ALL')
+    # load_historical_pnl('2025-08-15', data_source='ALL')
     # 4. 计算累计贡献度
-    # calculate_cumulative_contribution('2022-12-30', '2025-07-31', data_source='ALL')
+    # calculate_cumulative_contribution('2024-12-30', '2025-08-17', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2022-06-30', '2023-01-01')
 

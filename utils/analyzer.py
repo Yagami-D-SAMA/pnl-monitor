@@ -118,9 +118,10 @@ def load_historical_pnl(target_date_str, data_source='ALL'):
         total_cost = sum(data['cost'] for data in market_details)
         total_pnl = sum(data['pnl'] for data in market_details)
         realized_pnl = daily_pnl_result['realized_pnl']  # 历史数据中没有已实现盈亏信息
+        regional_pnl = daily_pnl_result['regional_pnl']
 
         generate_report(market_details, total_market_value, total_pnl, total_cost, realized_pnl,
-                        daily_pnl_result['date'])
+                        daily_pnl_result['date'], regional_pnl)
 
     except Exception as e:
         print(f"加载历史数据时发生错误: {e}")
@@ -344,7 +345,7 @@ def stock_monitor(days=30):
     # 获取GBPUSD汇率数据
     try:
         gbpusd_stock = yf.Ticker("GBPUSD=X")
-        gbpusd_data = gbpusd_stock.history(start=(datetime.today() - pd.Timedelta(days=days + 10)), end=datetime.today())
+        gbpusd_data = gbpusd_stock.history(start=(datetime.today() - pd.Timedelta(days=days + 1)), end=datetime.today())
         if not gbpusd_data.empty:
             gbpusd_start = gbpusd_data['Close'].iloc[0].item()
             gbpusd_end = gbpusd_data['Close'].iloc[-1].item()
@@ -362,7 +363,7 @@ def stock_monitor(days=30):
         try:
             # 获取历史价格数据
             stock = yf.Ticker(symbol)
-            hist_data = stock.history(start=(datetime.today() - pd.Timedelta(days=days + 10)), end=datetime.today())
+            hist_data = stock.history(start=(datetime.today() - pd.Timedelta(days=days + 1)), end=datetime.today())
             
             # 计算价格变化
             start_price = hist_data['Close'].iloc[0].item()

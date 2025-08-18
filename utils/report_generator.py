@@ -12,7 +12,7 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     
     print(f"\n持仓情况 ({latest_date.strftime('%Y-%m-%d')}):")
     print("-" * 320)
-    print(f"{'当前市场':<50} {'当前持仓':>10} {'当前价格(LC)':>8} {'买入价格(LC)':>12} {'成本(GBP)':>10} {'累计独立损益(%)':>15} {'累计盈亏(GBP)':>15}"
+    print(f"{'当前市场':<50} {'当前持仓':>10} {'当前价格(LC)':>8} {'平均买入价格(LC)':>12} {'成本(GBP)':>10} {'累计独立损益(%)':>15} {'累计盈亏(GBP)':>15}"
           f"{'累计外汇损益(%)':>15} {'累计外汇损益(GBP)':>15} {'当前市值(GBP)':>15} {'市值占比(%)':>10} {'持有天数':>10}")
     print("-" * 320)
     
@@ -52,7 +52,8 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
             'daily_fx_pnl': data['fx_pnl'],
             'bps_change': data['bps_change'],
             'fx_pnl_contribution': fx_pnl_contribution,
-            'pnl_contribution': pnl_contribution
+            'pnl_contribution': pnl_contribution,
+            'regional_pnl': region_pnl
         })
     
     # 按盈亏占比从大到小排序
@@ -111,7 +112,8 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
         'total_fx_pnl': sum(data['fx_pnl'] for data in daily_pnl_data),
         'total_non_fx_pnl': sum(data['non_fx_pnl'] for data in daily_pnl_data),
         'market_details': daily_pnl_data,
-        'realized_pnl': realized_pnl
+        'realized_pnl': realized_pnl,
+        'regional_pnl': region_pnl
         # 'indices_returns': indices_returns,
         # 'indices_dates': indices_dates
     }

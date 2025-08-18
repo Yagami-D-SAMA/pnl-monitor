@@ -73,7 +73,7 @@ class Calculator:
             consideration = sum(-buy_trade['consideration'] * (buy_trade['remaining_quantity'] / buy_trade['quantity'])
                                 for buy_trade in buy_trades
                                 if buy_trade['remaining_quantity'] > 0)
-
+            average_fx = consideration / cost if (trades_df[trades_df['Market'] == market]['Currency'].iloc[0] == 'USD' and position >0) else 1
             if position != 0:
                 current_positions[market] = {
                     'position': position,
@@ -83,10 +83,11 @@ class Calculator:
                     'initial_settlement_date': initial_settlement_date,
                     'last_buy_date': market_trades[market_trades['Direction'] == 'BUY'].iloc[-1]['TextDate'] if len(
                         market_trades[market_trades['Direction'] == 'BUY']) > 0 else None,
-                    'trade_price': trades_df[trades_df['Market'] == market]['Price'].iloc[0],
+                    'trade_price': consideration / position,
                     'consideration': consideration,
                     'asset_type': trades_df[trades_df['Market'] == market]['AssetType'].iloc[0],
-                    'regions': trades_df[trades_df['Market'] == market]['Region'].iloc[0]
+                    'regions': trades_df[trades_df['Market'] == market]['Region'].iloc[0],
+                    'average_fx': average_fx
                 }
         return current_positions
 
@@ -166,9 +167,9 @@ class Calculator:
                         # 计算累计外汇盈亏
                         cumulative_fx_return = 0
                         cumulative_fx_pnl = 0
-                        if position['ccy'] != 'GBP' and position['initial_fx_rate'] is not None:
-                            cumulative_fx_return = ((1 / position['initial_fx_rate']) / GBPUSD_FX - 1) * 100
-                            if position['ccy'] == 'USD':
+                        if position['ccy'] != 'GBP' and position['average_fx'] is not None:
+                            cumulative_fx_return = (position['average_fx'] / GBPUSD_FX - 1) * 100
+                            if position['ccy'] != 'GBP':
                                 cumulative_fx_pnl = (position['consideration'] - current_price * position[
                                     'position']) / GBPUSD_FX - (position['cost'] - market_value)
 
