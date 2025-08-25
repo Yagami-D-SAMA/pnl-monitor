@@ -92,6 +92,9 @@ class DataLoader:
         """
         GBPUSD = yf.Ticker("GBPUSD=X")
         GBPUSD_FX_Hist = GBPUSD.history(start=(target_date - pd.Timedelta(days=5)), end=target_date)
+        if GBPUSD_FX_Hist.index[-1].date() != target_date.date():
+            GBPUSD_FX_Hist = GBPUSD.history(start=(target_date - pd.Timedelta(days=5)),
+                                            end=target_date + pd.Timedelta(days=1))
         if not GBPUSD_FX_Hist.empty:
             return float(GBPUSD_FX_Hist['Close'].iloc[-1]), float(GBPUSD_FX_Hist['Close'].iloc[-2])
         return 1.0, 1.0

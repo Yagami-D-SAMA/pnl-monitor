@@ -63,7 +63,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         # GBPUSD_FX_prev = 1 / GBPUSD_FX_prev
         # GBPUSD_FX = 1 / GBPUSD_FX
         # 计算市场价值和盈亏
-        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl, total_market_value_usd, \
+        daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, total_market_value_usd, \
             total_market_value_gbp = calculator.calculate_market_values(current_positions, market_ticker_map,
                                                                         target_date, GBPUSD_FX, GBPUSD_FX_prev)
         # 计算已实现盈亏
@@ -93,13 +93,13 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
             ["GBP资产%", f"{gbp_percentage:.2f}%", ""],
             ["总市值", f"{total_market_value:,.2f}", "GBP"],
             ["当日GBP/USD", f"{GBPUSD_FX:.4f}", ""],
-            ["当日GBP/USD move", f"{gbp_usd_bps:.4f}", ""]
+            ["当日GBP/USD move", f"{gbp_usd_bps:.4f}", "bps"]
         ]
         print(tabulate(currency_data, headers=["项目", "数值", "单位"], maxcolwidths=[50, 50, 50]))
         
         # 生成报告
         daily_pnl_result = generate_report(
-            daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl)
+            daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, target_date, region_pnl)
         # 保存结果
         data_loader.save_results(daily_pnl_result, trade_history_paths)
 

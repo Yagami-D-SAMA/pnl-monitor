@@ -221,7 +221,7 @@ class Calculator:
             region_pnl[entry['region']] += entry['daily_pnl']
         region_pnl = dict(region_pnl)
 
-        return daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl, \
+        return daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, \
             total_market_value_usd, total_market_value_gbp
 
     def calculate_realized_pnl(self, trades_df: pd.DataFrame, markets: List[str]) -> float:
@@ -241,7 +241,7 @@ class Calculator:
             closed_positions = market_trades[market_trades['Direction'] == 'SELL']
             if any(closed_positions['Activity'] == 'CORPORATE ACTION'):
                 closed_positions = closed_positions[closed_positions['Activity'] != 'CORPORATE ACTION']
-                print(f"{market}市场存在Corporate actions，跳过pnl计算")
+                # print(f"{market}市场存在Corporate actions，跳过pnl计算")
 
             if not closed_positions.empty:
                 trade_pnl = 0
