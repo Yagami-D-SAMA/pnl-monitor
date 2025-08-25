@@ -13,6 +13,8 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         target_date = datetime.today()
     elif isinstance(target_date, str):
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
+    # force time to 14:30 each day
+    target_date = target_date.replace(hour=14, minute=30, second=0, microsecond=0)
 
     # 设置文件路径
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,8 +63,9 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         # GBPUSD_FX_prev = 1 / GBPUSD_FX_prev
         # GBPUSD_FX = 1 / GBPUSD_FX
         # 计算市场价值和盈亏
-        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl = calculator.calculate_market_values(
-            current_positions, market_ticker_map, target_date, GBPUSD_FX, GBPUSD_FX_prev)
+        daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl, total_market_value_usd, \
+            total_market_value_gbp = calculator.calculate_market_values(current_positions, market_ticker_map,
+                                                                        target_date, GBPUSD_FX, GBPUSD_FX_prev)
         # 计算已实现盈亏
         realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique())
         if asset_type:
@@ -72,6 +75,28 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
                 for entry in asset_type_pct
             ]
             print(tabulate(table_data, headers=["Asset Type", "Market Value %"], tablefmt="fancy_grid"))
+        
+        # 显示货币市值分布和汇率信息
+        print("\n货币市值分布:")
+        
+        # 计算百分比
+        usd_gbp_value = total_market_value_usd / GBPUSD_FX
+        usd_percentage = (usd_gbp_value / total_market_value) * 100 if total_market_value > 0 else 0
+        gbp_percentage = (total_market_value_gbp / total_market_value) * 100 if total_market_value > 0 else 0
+        gbp_usd_bps = (GBPUSD_FX - GBPUSD_FX_prev) * 10000
+        
+        currency_data = [
+            ["USD市值", f"{total_market_value_usd:,.2f}", "USD"],
+            ["USD资产(GBP)", f"{usd_gbp_value:,.2f}", "GBP"],
+            ["USD资产%", f"{usd_percentage:.2f}%", ""],
+            ["GBP市值", f"{total_market_value_gbp:,.2f}", "GBP"],
+            ["GBP资产%", f"{gbp_percentage:.2f}%", ""],
+            ["总市值", f"{total_market_value:,.2f}", "GBP"],
+            ["当日GBP/USD", f"{GBPUSD_FX:.4f}", ""],
+            ["当日GBP/USD move", f"{gbp_usd_bps:.4f}", ""]
+        ]
+        print(tabulate(currency_data, headers=["项目", "数值", "单位"], maxcolwidths=[50, 50, 50]))
+        
         # 生成报告
         daily_pnl_result = generate_report(
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl)
@@ -165,6 +190,26 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             "Nifty 50 (India)": "^NSEI",
             "Bovespa (Brazil)": "^BVSP"
         }
+        # 获取GBPUSD汇率数据
+        try:
+            gbpusd_ticker = yf.Ticker("GBPUSD=X")
+            gbpusd_data = gbpusd_ticker.history(start=start_date - pd.Timedelta(days=1), end=end_date + pd.Timedelta(days=1))
+            if not gbpusd_data.empty:
+                gbpusd_start = gbpusd_data['Close'].iloc[0]
+                gbpusd_end = gbpusd_data['Close'].iloc[-1]
+                gbpusd_change = gbpusd_end - gbpusd_start
+                gbpusd_bps = gbpusd_change * 10000
+                print(f"\nGBP/USD汇率变化 ({start_date_str} 至 {end_date_str}):")
+                print("-" * 60)
+                print(f"起始汇率: {gbpusd_start:.4f}")
+                print(f"结束汇率: {gbpusd_end:.4f}")
+                print(f"汇率变化(bps): {gbpusd_bps:+.2f} bps")
+                print("-" * 60)
+            else:
+                print("无法获取GBP/USD汇率数据")
+        except Exception as e:
+            print(f"获取GBP/USD汇率数据时发生错误: {e}")
+        
         # 计算指数累计回报率
         index_returns = {}
         for index_name, ticker in indices.items():

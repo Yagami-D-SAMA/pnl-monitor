@@ -114,8 +114,6 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
         'market_details': daily_pnl_data,
         'realized_pnl': realized_pnl,
         'regional_pnl': region_pnl
-        # 'indices_returns': indices_returns,
-        # 'indices_dates': indices_dates
     }
 
 if __name__ == "__main__":

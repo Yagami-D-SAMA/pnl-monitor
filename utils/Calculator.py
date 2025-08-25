@@ -5,6 +5,12 @@ import yfinance as yf
 from typing import Dict, List, Tuple
 from collections import defaultdict
 
+def is_weekend(date_obj: datetime.date) -> bool:
+    """
+    Return True if date_obj is Saturday or Sunday, else False.
+    """
+    return date_obj.weekday() >= 5
+
 class Calculator:
     """
     计算器类，用于处理投资组合相关的计算
@@ -114,6 +120,10 @@ class Calculator:
         total_pnl = 0
         total_cost = 0
 
+        # 初始化货币市值统计
+        total_market_value_usd = 0
+        total_market_value_gbp = 0
+        
         for market, position in current_positions.items():
             if market in market_ticker_map:
                 ticker = market_ticker_map[market]
@@ -123,7 +133,10 @@ class Calculator:
 
                     if len(hist_data.index) >= 2:
                         latest_date = hist_data.index[-1]
-                        prev_day = hist_data.index[-2]
+                        if latest_date.date() != target_date.date() and not is_weekend(target_date.date()):
+                            prev_day = hist_data.index[-1]
+                        else:
+                            prev_day = hist_data.index[-2]
                         current_price = float(hist_data.loc[latest_date, 'Close'])
                         prev_price = float(hist_data.loc[prev_day, 'Close'])
 
@@ -150,12 +163,14 @@ class Calculator:
                         # 计算市值和盈亏
                         if position['ccy'] == 'USD':
                             market_value = current_price * position['position'] / GBPUSD_FX
+                            total_market_value_usd += current_price * position['position']
                             non_fx_pnl = price_change * position['position'] / GBPUSD_FX
                             fx_change = (1 / GBPUSD_FX - 1 / GBPUSD_FX_prev)
                             fx_pnl = (current_price * position['position']) * fx_change
                             daily_pnl = non_fx_pnl + fx_pnl
                         else:
                             market_value = current_price * position['position']
+                            total_market_value_gbp += market_value
                             daily_pnl = price_change * position['position']
                             fx_pnl = 0
                             non_fx_pnl = daily_pnl
@@ -206,7 +221,8 @@ class Calculator:
             region_pnl[entry['region']] += entry['daily_pnl']
         region_pnl = dict(region_pnl)
 
-        return daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl
+        return daily_pnl_data, total_market_value, total_pnl, total_cost, latest_date, region_pnl, \
+            total_market_value_usd, total_market_value_gbp
 
     def calculate_realized_pnl(self, trades_df: pd.DataFrame, markets: List[str]) -> float:
         """
@@ -348,7 +364,7 @@ if __name__ == "__main__":
 
     if trades_df is not None and enum_df is not None:
         # 测试持仓计算
-        positions = calculate_positions(trades_df)
+        positions = Calculator().calculate_positions(trades_df)
         print("\n当前持仓:")
         print(positions)
 
@@ -356,18 +372,18 @@ if __name__ == "__main__":
         market_ticker_map = get_market_ticker_map(trades_df, enum_df)
         from datetime import datetime
 
-        daily_pnl_data, total_mv, total_pnl, total_cost, latest_date = calculate_market_values(
+        daily_pnl_data, total_mv, total_pnl, total_cost, latest_date = Calculator().calculate_market_values(
             positions, market_ticker_map, datetime.today(), 1.27, 1.26)
 
         print(f"\n总市值: {total_mv:,.2f}")
         print(f"总盈亏: {total_pnl:,.2f}")
 
         # 测试已实现盈亏计算
-        realized_pnl = calculate_realized_pnl(trades_df, trades_df['Market'].unique())
+        realized_pnl = Calculator().calculate_realized_pnl(trades_df, trades_df['Market'].unique())
         print(f"已实现盈亏: {realized_pnl:,.2f}")
 
         # 测试全球指数回报率计算
-        indices_returns, indices_dates = calculate_global_indices_return(datetime.today())
+        indices_returns, indices_dates = Calculator().calculate_global_indices_return(datetime.today())
         print("\n全球主要指数回报率:")
         for index_name, return_bps in indices_returns.items():
             if return_bps is not None:

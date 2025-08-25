@@ -16,15 +16,11 @@ if __name__ == "__main__":
     # 1. 计算今日PnL
     analyze_portfolio(data_source='ALL', asset_type=True)
     # 2. 股票均线监控
-    # stock_monitor(2)
+    # stock_monitor(10)
     # 3. 查看历史PnL
-    # load_historical_pnl('2025-08-15', data_source='ALL')
+    # load_historical_pnl('2025-08-22', data_source='ALL')
     # 4. 计算累计贡献度
-    # calculate_cumulative_contribution('2024-12-30', '2025-08-17', data_source='ALL')
+    # calculate_cumulative_contribution('2024-12-30', '2025-08-24', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2022-06-30', '2023-01-01')
 
-# TODO Calculate alpha over SP500 and major indices
-# TODO Display historical pnl, and hist vol?
-# TODO add portfolio analysis, asset type contribution and country breakdown
-# TODO weighted average trading price calculation
