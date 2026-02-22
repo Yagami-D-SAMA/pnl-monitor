@@ -13,14 +13,15 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         target_date = datetime.today()
     elif isinstance(target_date, str):
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
-    # force time to 14:30 each day
-    target_date = target_date.replace(hour=14, minute=30, second=0, microsecond=0)
+    # force time to 23:30 each day
+    target_date = target_date.replace(hour=23, minute=30, second=0, microsecond=0)
 
     # 设置文件路径
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     investment_dir = os.path.join(base_dir, 'investment')
     trade_history_path_SXAFI = os.path.join(investment_dir, 'TradeHistory-SXAFI.csv')
     trade_history_path_SX9Q9 = os.path.join(investment_dir, 'TradeHistory-SX9Q9.csv')
+    dvd_history_path = os.path.join(investment_dir, 'DvdHistory.csv')
     enum_path = os.path.join(investment_dir, 'enum.csv')
 
     # 确定要处理的文件
@@ -43,6 +44,9 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
     if not os.path.exists(enum_path):
         print(f"错误：无法找到枚举文件 - {enum_path}")
         return
+    if not os.path.exists(dvd_history_path):
+        print(f"错误：无法找到枚举文件 - {dvd_history_path}")
+        return
 
     try:
         # 加载数据
@@ -50,18 +54,16 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         from . import DataLoader
         from . import Calculator
         data_loader = DataLoader(investment_dir)
-        trades_df, enum_df = data_loader.load_trade_data(trade_history_paths, enum_path, target_date)
-        if trades_df is None or enum_df is None:
+        trades_df, enum_df, dvd_df  = data_loader.load_trade_data(trade_history_paths, enum_path, dvd_history_path, target_date)
+        if trades_df is None or enum_df is None or dvd_df is None:
             return
         # 获取市场和ticker映射
         market_ticker_map = data_loader.get_market_ticker_map()
         # 计算持仓
         calculator = Calculator()
-        current_positions = calculator.calculate_positions(trades_df)
+        current_positions = calculator.calculate_positions(trades_df, dvd_df)
         # 获取汇率数据
         GBPUSD_FX, GBPUSD_FX_prev = data_loader.get_fx_rates(target_date)
-        # GBPUSD_FX_prev = 1 / GBPUSD_FX_prev
-        # GBPUSD_FX = 1 / GBPUSD_FX
         # 计算市场价值和盈亏
         daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, total_market_value_usd, \
             total_market_value_gbp = calculator.calculate_market_values(current_positions, market_ticker_map,
@@ -296,9 +298,9 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             print(f"年化总贡献度: {annualized_return:>15,.2f}%")
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间非外汇累计贡献度: {cumulative_contribution - cumulative_fx_contribution:>12,.2f} bps")
-            print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
+            print(f"期间净盈亏: {total_pnl:>20,.2f} GBP")
             print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
-            print(f"期间非外汇盈亏: {total_pnl - total_fx_pnl:>18,.2f} GBP")
+            print(f"期间盈亏: {total_pnl - total_fx_pnl:>18,.2f} GBP")
             print("-" * 80)
             
             # 打印指数累计回报率

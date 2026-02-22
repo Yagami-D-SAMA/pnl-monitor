@@ -14,9 +14,10 @@ class DataLoader:
         self.investment_dir = investment_dir
         self.trades_df = None
         self.enum_df = None
+        self.dvd_history_path = None
         self.market_ticker_map = None
 
-    def load_trade_data(self, trade_history_paths, enum_path, target_date=None):
+    def load_trade_data(self, trade_history_paths, enum_path, dvd_history_path, target_date=None):
         """加载交易数据和枚举数据
         
         Args:
@@ -30,22 +31,54 @@ class DataLoader:
         try:
             self.trades_df = pd.concat([pd.read_csv(path) for path in trade_history_paths])
             self.enum_df = pd.read_csv(enum_path)
+            self.dvd_df = pd.read_csv(dvd_history_path)
             
             # 数据预处理
             self.trades_df['Price'] = self.trades_df['Price'] / 100
             self.trades_df['TextDate'] = pd.to_datetime(self.trades_df['TextDate'], format='%d/%m/%Y')
             self.trades_df['TradeValue'] = self.trades_df['Price'] * self.trades_df['Quantity']
-            
+            self.dvd_df['TextDate'] = pd.to_datetime(self.dvd_df['TextDate'], format='%d/%m/%Y')
+            self.normalize_dvd_market_names()
+
             # 如果提供了target_date，过滤掉晚于target_date的交易
             if target_date is not None:
                 if isinstance(target_date, str):
                     target_date = pd.to_datetime(target_date)
                 self.trades_df = self.trades_df[self.trades_df['TextDate'] <= target_date]
+                self.dvd_df = self.dvd_df[self.dvd_df['TextDate'] <= target_date]
             
-            return self.trades_df, self.enum_df
+            return self.trades_df, self.enum_df, self.dvd_df
         except Exception as e:
             print(f"加载数据时发生错误: {e}")
             return None, None
+
+    def normalize_dvd_market_names(self):
+        """用 enum 中的标准名称替换 dvd 中的 Market Name。
+        若 dvd_df['Market Name'] 中包含某个 enum_df['Name']，则用该 enum 的 Name 替换。
+        """
+        if self.dvd_df is None or self.enum_df is None:
+            print("请先加载交易数据（含 dvd 与 enum）")
+            return
+        if 'MarketName' not in self.dvd_df.columns:
+            print("dvd_df 中无 'Market Name' 列")
+            return
+        if 'Name' not in self.enum_df.columns:
+            print("enum_df 中无 'Name' 列")
+            return
+
+        enum_names = self.enum_df['Name'].dropna().astype(str).str.strip().tolist()
+
+        def replace_with_enum(market_name):
+            if pd.isna(market_name):
+                return market_name
+            market_name_str = str(market_name).strip()
+            # 在 dvd 的 Market Name 里找被包含的 enum Name，取最长匹配
+            matches = [ename for ename in enum_names if ename in market_name_str]
+            if matches:
+                return max(matches, key=len)
+            return market_name
+
+        self.dvd_df['MarketName'] = self.dvd_df['MarketName'].apply(replace_with_enum)
 
     def get_market_ticker_map(self):
         """获取市场和对应的ticker映射

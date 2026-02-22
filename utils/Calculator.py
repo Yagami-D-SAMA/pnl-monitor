@@ -22,7 +22,7 @@ class Calculator:
         """
         pass
     
-    def calculate_positions(self, trades_df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    def calculate_positions(self, trades_df: pd.DataFrame, dvd_df: pd.DataFrame ) -> Dict[str, Dict[str, float]]:
         """
         计算当前持仓
         
@@ -81,6 +81,8 @@ class Calculator:
                                 if buy_trade['remaining_quantity'] > 0)
             average_fx = consideration / cost if (trades_df[trades_df['Market'] == market]['Currency'].iloc[0] == 'USD' and position >0) else 1
             if position != 0:
+                # 该 market 下所有 dvd 的 PL Amount 之和
+                dvd_pl_total = dvd_df.loc[dvd_df['MarketName'] == market, 'PL Amount'].sum()
                 current_positions[market] = {
                     'position': position,
                     'cost': cost,
@@ -93,7 +95,8 @@ class Calculator:
                     'consideration': consideration,
                     'asset_type': trades_df[trades_df['Market'] == market]['AssetType'].iloc[0],
                     'regions': trades_df[trades_df['Market'] == market]['Region'].iloc[0],
-                    'average_fx': average_fx
+                    'average_fx': average_fx,
+                    'dvd_pl_total': dvd_pl_total
                 }
         return current_positions
 
@@ -129,7 +132,7 @@ class Calculator:
                 ticker = market_ticker_map[market]
                 try:
                     stock = yf.Ticker(ticker)
-                    hist_data = stock.history(start=(target_date - pd.Timedelta(days=5)), end=target_date)
+                    hist_data = stock.history(start=(target_date - pd.Timedelta(days=20)), end=target_date)
 
                     if len(hist_data.index) >= 2:
                         latest_date = hist_data.index[-1]
@@ -154,7 +157,7 @@ class Calculator:
                             holding_days_latest = (latest_date.date() - position['last_buy_date'].date()).days
 
                         # 价格调整
-                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L'}:
+                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L'}:
                             current_price /= 100
                             prev_price /= 100
                             price_change /= 100
@@ -175,7 +178,7 @@ class Calculator:
                             fx_pnl = 0
                             non_fx_pnl = daily_pnl
 
-                        pnl = market_value - position['cost']
+                        pnl = market_value - position['cost'] + position['dvd_pl_total']
                         # 计算bps时也要考虑分红的影响
                         bps_change = (price_change / prev_price) * 10000
 
@@ -256,21 +259,34 @@ class Calculator:
                     buy_trades['Quantity'] = valid_quantities
                     buy_trades = buy_trades[buy_trades['Activity'] != 'CORPORATE ACTION']
                 remaining_quantity = -closed_positions['Quantity'].sum()
+                position = 0
                 for _, buy_trade in buy_trades.iterrows():
                     if remaining_quantity <= 0:
                         break
-                    matched_quantity = min(buy_trade['Quantity'], remaining_quantity)
-                    remaining_quantity -= matched_quantity
+                    if buy_trade['Quantity'] <= remaining_quantity:
+                        remaining_quantity -= buy_trade['Quantity']
+                        position += 1
+                    else:
+                        position = position + remaining_quantity/buy_trade['Quantity']
+                        remaining_quantity = 0
 
-                if (closed_positions.shape[0] == 1) & (buy_trades.shape[0] == 1):
-                    trade_pnl += float(closed_positions['Cost/Proceeds'].iloc[0]) + float(
-                        buy_trades['Cost/Proceeds'].iloc[0])
-                elif (closed_positions.shape[0] == 1) & (buy_trades.shape[0] != 1):
-                    trade_pnl += float(closed_positions['Cost/Proceeds'].iloc[0]) + float(buy_trades['Cost/Proceeds'].sum())
-                elif (closed_positions.shape[0] != 1) & (buy_trades.shape[0] == 1):
-                    trade_pnl += float(closed_positions['Cost/Proceeds'].sum()) + float(buy_trades['Cost/Proceeds'].iloc[0])
-                else:
-                    trade_pnl += float(closed_positions['Cost/Proceeds'].sum()) + float(buy_trades['Cost/Proceeds'].sum())
+                # 计算buy_trades的Cost/Proceeds，考虑position的小数部分
+                buy_trades_pnl = 0
+                position_int = int(position)
+                position_frac = position - position_int  # 小数部分
+                
+                # 保留前position_int行
+                if position_int > 0:
+                    buy_trades_pnl += float(buy_trades['Cost/Proceeds'].iloc[:position_int].sum())
+                
+                # 如果有小数部分，处理第position_int行（索引从0开始，所以是position_int）
+                if position_frac > 0 and position_int < len(buy_trades):
+                    buy_trades_pnl += float(buy_trades['Cost/Proceeds'].iloc[position_int]) * position_frac
+                
+                # 计算closed_positions的Cost/Proceeds
+                closed_pnl = float(closed_positions['Cost/Proceeds'].sum())
+                
+                trade_pnl += closed_pnl + buy_trades_pnl
 
                 if remaining_quantity > 0:
                     print(f"警告：{market}市场的卖出数量大于之前的买入数量")
