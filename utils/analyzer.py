@@ -61,7 +61,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         market_ticker_map = data_loader.get_market_ticker_map()
         # 计算持仓
         calculator = Calculator()
-        current_positions = calculator.calculate_positions(trades_df, dvd_df)
+        current_positions, closed_positions = calculator.calculate_positions(trades_df, dvd_df)
         # 获取汇率数据
         GBPUSD_FX, GBPUSD_FX_prev = data_loader.get_fx_rates(target_date)
         # 计算市场价值和盈亏
@@ -69,7 +69,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
             total_market_value_gbp = calculator.calculate_market_values(current_positions, market_ticker_map,
                                                                         target_date, GBPUSD_FX, GBPUSD_FX_prev)
         # 计算已实现盈亏
-        realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique())
+        realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique(), closed_positions)
         if asset_type:
             asset_type_pct = calculator.asset_type_calc(daily_pnl_data)
             table_data = [

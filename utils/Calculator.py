@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from datetime import datetime
 import yfinance as yf
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 from collections import defaultdict
 
 def is_weekend(date_obj: datetime.date) -> bool:
@@ -22,7 +22,8 @@ class Calculator:
         """
         pass
     
-    def calculate_positions(self, trades_df: pd.DataFrame, dvd_df: pd.DataFrame ) -> Dict[str, Dict[str, float]]:
+    def calculate_positions(self, trades_df: pd.DataFrame, dvd_df: pd.DataFrame ) -> tuple[
+        dict[Any, Any], dict[Any, Any]]:
         """
         计算当前持仓
         
@@ -34,6 +35,7 @@ class Calculator:
         """
         markets = trades_df['Market'].unique()
         current_positions = {}
+        closed_positions = {}
 
         for market in markets:
             market_trades = trades_df[trades_df['Market'] == market].sort_values(['TextDate', 'Time'])
@@ -98,7 +100,12 @@ class Calculator:
                     'average_fx': average_fx,
                     'dvd_pl_total': dvd_pl_total
                 }
-        return current_positions
+            else:
+                dvd_pl_total = dvd_df.loc[dvd_df['MarketName'] == market, 'PL Amount'].sum()
+                closed_positions[market] = {
+                    'dvd_pl_total': dvd_pl_total
+                }
+        return current_positions, closed_positions
 
     def calculate_market_values(self, current_positions: Dict[str, Dict[str, float]],
                               market_ticker_map: Dict[str, str],
@@ -227,7 +234,7 @@ class Calculator:
         return daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, \
             total_market_value_usd, total_market_value_gbp
 
-    def calculate_realized_pnl(self, trades_df: pd.DataFrame, markets: List[str]) -> float:
+    def calculate_realized_pnl(self, trades_df: pd.DataFrame, markets: List[str], realized_positions) -> float:
         """
         计算已实现盈亏
 
@@ -248,6 +255,9 @@ class Calculator:
 
             if not closed_positions.empty:
                 trade_pnl = 0
+                dvd = 0.0
+                if market in realized_positions and isinstance(realized_positions[market], dict):
+                    dvd = realized_positions[market].get('dvd_pl_total', 0.0)
                 buy_trades = market_trades[
                     (market_trades['TextDate'] <= closed_positions['TextDate'].max()) &
                     (market_trades['Direction'] == 'BUY')
@@ -286,7 +296,7 @@ class Calculator:
                 # 计算closed_positions的Cost/Proceeds
                 closed_pnl = float(closed_positions['Cost/Proceeds'].sum())
                 
-                trade_pnl += closed_pnl + buy_trades_pnl
+                trade_pnl += closed_pnl + buy_trades_pnl + dvd
 
                 if remaining_quantity > 0:
                     print(f"警告：{market}市场的卖出数量大于之前的买入数量")
