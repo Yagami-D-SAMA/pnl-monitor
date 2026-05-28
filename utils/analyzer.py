@@ -1,10 +1,40 @@
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import pickle
 from tabulate import tabulate
 import yfinance as yf
+from utils.Calculator import is_weekend
+from pathlib import Path
+import re
+from utils.ticker_harvest import read_h5, OUTPUT_DIR, H5_KEY
+from utils.FundamentalData import fetch_earnings_batch
+from datetime import date, datetime, timedelta
 
+BANK_HOLIDAYS: set[date] = {
+    date(2026, 5, 25),
+    # date(2025, 12, 25),  # 示例：按需添加
+}
+def is_bank_holiday(d: date) -> bool:
+    return d in BANK_HOLIDAYS
+def is_business_day(d: date) -> bool:
+    return not is_weekend(d) and not is_bank_holiday(d)
+
+# def get_previous_business_day(target_date: datetime) -> datetime:
+#     # 先从前一天开始
+#     prev_date = target_date - timedelta(days=1)
+#
+#     # 如果是周末，就一直往前减一天，直到不是周末
+#     while is_weekend(prev_date.date()):
+#         prev_date -= timedelta(days=1)
+#
+#     return prev_date
+
+def get_previous_business_day(target_date: datetime) -> datetime:
+    prev_date = target_date - timedelta(days=1)
+    while not is_business_day(prev_date.date()):
+        prev_date -= timedelta(days=1)
+    return prev_date
 
 def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True) -> object:
     """主函数：分析投资组合"""
@@ -15,6 +45,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
     # force time to 23:30 each day
     target_date = target_date.replace(hour=23, minute=30, second=0, microsecond=0)
+    prev_date = get_previous_business_day(target_date)
 
     # 设置文件路径
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,8 +84,8 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         from . import generate_report
         from . import DataLoader
         from . import Calculator
-        data_loader = DataLoader(investment_dir)
-        trades_df, enum_df, dvd_df  = data_loader.load_trade_data(trade_history_paths, enum_path, dvd_history_path, target_date)
+        data_loader = DataLoader(investment_dir, trade_history_paths, enum_path, dvd_history_path, target_date)
+        trades_df, enum_df, dvd_df  = data_loader.load_trade_data()
         if trades_df is None or enum_df is None or dvd_df is None:
             return
         # 获取市场和ticker映射
@@ -64,10 +95,11 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         current_positions, closed_positions = calculator.calculate_positions(trades_df, dvd_df)
         # 获取汇率数据
         GBPUSD_FX, GBPUSD_FX_prev = data_loader.get_fx_rates(target_date)
+        market_comp_rtn = data_loader.get_market_comp_rtn(target_date,['^GSPC', 'ES=F'], prev_date)
         # 计算市场价值和盈亏
-        daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, total_market_value_usd, \
+        daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, region_market_value, strategy_pnl, strategy_market_value, total_market_value_usd, \
             total_market_value_gbp = calculator.calculate_market_values(current_positions, market_ticker_map,
-                                                                        target_date, GBPUSD_FX, GBPUSD_FX_prev)
+                                                                        target_date, prev_date, GBPUSD_FX, GBPUSD_FX_prev, market_comp_rtn)
         # 计算已实现盈亏
         realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique(), closed_positions)
         if asset_type:
@@ -97,11 +129,11 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
             ["当日GBP/USD", f"{GBPUSD_FX:.4f}", ""],
             ["当日GBP/USD move", f"{gbp_usd_bps:.4f}", "bps"]
         ]
-        print(tabulate(currency_data, headers=["项目", "数值", "单位"], maxcolwidths=[50, 50, 50]))
+        print(tabulate(currency_data, headers=["项目", "数值", "单位"], disable_numparse=[0, 1, 2]))
         
         # 生成报告
         daily_pnl_result = generate_report(
-            daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, target_date, region_pnl)
+            daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, target_date, region_pnl, region_market_value, strategy_pnl, strategy_market_value)
         # 保存结果
         data_loader.save_results(daily_pnl_result, trade_history_paths)
 
@@ -145,7 +177,7 @@ def load_historical_pnl(target_date_str, data_source='ALL'):
         total_cost = sum(data['cost'] for data in market_details)
         total_pnl = sum(data['pnl'] for data in market_details)
         realized_pnl = daily_pnl_result['realized_pnl']  # 历史数据中没有已实现盈亏信息
-        regional_pnl = daily_pnl_result['regional_pnl']
+        regional_pnl = daily_pnl_result.get('regional_pnl')
 
         generate_report(market_details, total_market_value, total_pnl, total_cost, realized_pnl,
                         daily_pnl_result['date'], regional_pnl)
@@ -179,6 +211,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
 
         # 定义指数列表
         indices = {
+            "MSCI World": "URTH",
             "S&P 500": "^GSPC",
             "Dow Jones": "^DJI",
             "Nasdaq 100": "^NDX",
@@ -298,7 +331,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             print(f"年化总贡献度: {annualized_return:>15,.2f}%")
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间非外汇累计贡献度: {cumulative_contribution - cumulative_fx_contribution:>12,.2f} bps")
-            print(f"期间净盈亏: {total_pnl:>20,.2f} GBP")
+            print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
             print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
             print(f"期间盈亏: {total_pnl - total_fx_pnl:>18,.2f} GBP")
             print("-" * 80)
@@ -460,6 +493,38 @@ def stock_monitor(days=30):
             print(f"{symbol:<10} {data['pnl']:<12.2f} {data['return_contribution']:<+12.2f}% {data['weight']:<8.3f}")
     
     return portfolio_data, total_pnl, total_return
+
+def parse_ticker_db_date(path: Path) -> datetime:
+    """从 tickers_NYSE+NASDAQ_20260514_171332.h5 解析 20260514"""
+    m = re.search(r"_(\d{8})_\d{6}\.h5$", path.name)
+    if not m:
+        raise ValueError(f"无法从文件名解析日期: {path.name}")
+    return datetime.strptime(m.group(1), "%Y%m%d")
+
+def stock_value_factor(ticker_h5=None, as_of_date=None, fiscal_year=2025, fiscal_period="q4", limit=None):
+    ticker_db = OUTPUT_DIR / "tickers_NYSE+NASDAQ_20260519_165904.h5"
+    h5_path = ticker_h5 or ticker_db
+    db_as_of = as_of_date or parse_ticker_db_date(h5_path)
+    # read_h5 会打印摘要；若不想刷屏，可用下面静默版：
+    tickers = pd.read_hdf(h5_path, key=H5_KEY)
+    # tickers = read_h5(h5_path)
+    # 通常只要上市、普通股
+    universe = tickers[
+        (tickers["status"] == "Active")
+        & (tickers["asset_type"].str.upper() == "STOCK")
+    ].copy()
+    print(f"Ticker universe as of {db_as_of.date()}: {len(universe):,} symbols")
+    symbols = universe["symbol"].tolist()
+    earnings_df = fetch_earnings_batch(
+        symbols,
+        year=fiscal_year,
+        period=fiscal_period,
+        limit=limit,  # 全市场先别去掉 limit
+        sleep_sec=0.25,  # 按你套餐调，避免 429
+    )
+    # 后续：对 universe["symbol"] 拉估值/earnings（如 API Ninjas）再算 value factor
+    return universe, db_as_of, earnings_df
+
 
 
 if __name__ == "__main__":

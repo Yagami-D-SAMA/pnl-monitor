@@ -4,12 +4,132 @@ from datetime import datetime
 import yfinance as yf
 from typing import Dict, List, Tuple, Any
 from collections import defaultdict
+import json
+import time
+from urllib.parse import urlencode
+from urllib.request import urlopen
+
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "OLX51ZCO9GZDLBS2")
+AV_BASE_URL = "https://www.alphavantage.co/query"
+
+_last_av_request_at = 0.0
+
+def _wait_for_av_rate_limit(min_interval: float = 1.0) -> None:
+    """Alpha Vantage 免费版约 1 次/秒，两次请求之间至少间隔 min_interval 秒。"""
+    global _last_av_request_at
+    now = time.monotonic()
+    wait = min_interval - (now - _last_av_request_at)
+    if wait > 0:
+        time.sleep(wait)
+    _last_av_request_at = time.monotonic()
+
+def fetch_av_close_on_date(ticker: str, day, api_key: str = ALPHA_VANTAGE_API_KEY) -> float | None:
+    """
+    从 Alpha Vantage TIME_SERIES_DAILY 取指定交易日的 close。
+    day: datetime.date 或 datetime
+  """
+    if hasattr(day, "date"):
+        day = day.date()
+    date_str = day.strftime("%Y-%m-%d")
+
+    params = {
+        "function": "TIME_SERIES_DAILY",
+        "symbol": ticker,
+        "apikey": api_key,
+        "outputsize": "compact",  # 最近约100个交易日，够覆盖20天窗口
+    }
+    url = f"{AV_BASE_URL}?{urlencode(params)}"
+
+    _wait_for_av_rate_limit(10.0)
+
+    with urlopen(url, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    if "Note" in payload or "Information" in payload:
+        print(f"Alpha Vantage 限流/提示: {ticker} -> {payload.get('Note') or payload.get('Information')}")
+        return None
+    if "Error Message" in payload:
+        print(f"Alpha Vantage 错误: {ticker} -> {payload['Error Message']}")
+        return None
+
+    series = payload.get("Time Series (Daily)")
+    if not series:
+        print(f"Alpha Vantage 无日线数据: {ticker}")
+        return None
+
+    row = series.get(date_str)
+    if not row:
+        print(f"Alpha Vantage 无 {date_str} 行情: {ticker}")
+        return None
+
+    return float(row["4. close"])
+
+def resolve_group_label(
+    entry: dict,
+    group_key: str,
+    *,
+    fallback_key: str | None = None,
+) -> str:
+    """取分组名；空/NaN 时用 fallback_key，再不行用 market。"""
+    val = entry.get(group_key)
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        val = None
+    elif isinstance(val, str) and not val.strip():
+        val = None
+
+    if val is None and fallback_key:
+        val = entry.get(fallback_key)
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        val = entry.get("market", "UNKNOWN")
+    return str(val)
+
+
+def aggregate_daily_pnl(
+    daily_pnl_data: list[dict],
+    group_key: str,
+    *,
+    pnl_key: str = "daily_pnl",
+    fallback_key: str | None = None,
+) -> dict[str, float]:
+    """按 group_key 汇总 daily_pnl，返回 {分组名: 盈亏}。"""
+    totals: defaultdict[str, float] = defaultdict(float)
+    for entry in daily_pnl_data:
+        label = resolve_group_label(entry, group_key, fallback_key=fallback_key)
+        totals[label] += entry[pnl_key]
+    return dict(totals)
 
 def is_weekend(date_obj: datetime.date) -> bool:
     """
     Return True if date_obj is Saturday or Sunday, else False.
     """
     return date_obj.weekday() >= 5
+
+def resolve_latest_prev_day(hist_data: pd.DataFrame, target_date: datetime, prev_date: datetime, ticker: str):
+    """
+    从 hist_data 中解析 latest_date 与 prev_day，并校验 prev_day 是否等于期望 prev_date（仅比较年月日）
+
+    Returns:
+        tuple: (latest_date, prev_day, ok)
+            - latest_date/pred_day 为 Timestamp 或 None
+            - ok: bool，表示是否通过 prev_date 校验
+    """
+    if len(hist_data.index) < 2:
+        return None, None, False
+
+    latest_date = hist_data.index[-1]
+    if latest_date.date() != target_date.date() and not is_weekend(target_date.date()):
+        prev_day = hist_data.index[-1]
+    else:
+        prev_day = hist_data.index[-2]
+
+    if prev_date.date() != prev_day.date():
+        print(
+            f"警告：yfinance {ticker} 的 prev_day 为 {prev_day.date()}，"
+            f"与期望的 prev_date {prev_date.date()} 不一致"
+        )
+        return latest_date, prev_day, False
+
+    return latest_date, prev_day, True
 
 class Calculator:
     """
@@ -97,6 +217,7 @@ class Calculator:
                     'consideration': consideration,
                     'asset_type': trades_df[trades_df['Market'] == market]['AssetType'].iloc[0],
                     'regions': trades_df[trades_df['Market'] == market]['Region'].iloc[0],
+                    'strategy': trades_df[trades_df['Market'] == market]['Strategy'].iloc[0],
                     'average_fx': average_fx,
                     'dvd_pl_total': dvd_pl_total
                 }
@@ -110,8 +231,10 @@ class Calculator:
     def calculate_market_values(self, current_positions: Dict[str, Dict[str, float]],
                               market_ticker_map: Dict[str, str],
                               target_date: datetime,
+                              prev_date :datetime,
                               GBPUSD_FX: float,
-                              GBPUSD_FX_prev: float) -> Tuple[List[Dict], float, float, float, datetime]:
+                              GBPUSD_FX_prev: float,
+                              market_comp_rtn) -> Tuple[List[Dict], float, float, float, datetime]:
         """
         计算市场价值和盈亏
 
@@ -133,6 +256,8 @@ class Calculator:
         # 初始化货币市值统计
         total_market_value_usd = 0
         total_market_value_gbp = 0
+
+        api_key = ALPHA_VANTAGE_API_KEY
         
         for market, position in current_positions.items():
             if market in market_ticker_map:
@@ -142,13 +267,21 @@ class Calculator:
                     hist_data = stock.history(start=(target_date - pd.Timedelta(days=20)), end=target_date)
 
                     if len(hist_data.index) >= 2:
-                        latest_date = hist_data.index[-1]
-                        if latest_date.date() != target_date.date() and not is_weekend(target_date.date()):
-                            prev_day = hist_data.index[-1]
-                        else:
-                            prev_day = hist_data.index[-2]
+                        latest_date, prev_day, ok = resolve_latest_prev_day(hist_data, target_date, prev_date, ticker)
+                        if latest_date is None:
+                            print(f"{ticker}没有{latest_date}价格数据")
+                            continue
+
                         current_price = float(hist_data.loc[latest_date, 'Close'])
-                        prev_price = float(hist_data.loc[prev_day, 'Close'])
+                        if not ok:
+                            # print(
+                            #     f"yfinance 无 {prev_date.date()} 的 T-1 价格 ({ticker}, "
+                            #     f"yfinance prev_day={prev_day.date()})，改用 Alpha Vantage"
+                            # )
+                            # prev_price = fetch_av_close_on_date(ticker, prev_date, api_key)
+                            continue
+                        else:
+                            prev_price = float(hist_data.loc[prev_day, 'Close'])
 
                         # 检查是否有分红
                         dividend = float(hist_data.loc[latest_date, 'Dividends']) if 'Dividends' in hist_data.columns else 0
@@ -164,7 +297,8 @@ class Calculator:
                             holding_days_latest = (latest_date.date() - position['last_buy_date'].date()).days
 
                         # 价格调整
-                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L'}:
+                        # todo find a better way to treat below ticker price adj
+                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L', 'STHS.L'}:
                             current_price /= 100
                             prev_price /= 100
                             price_change /= 100
@@ -202,7 +336,9 @@ class Calculator:
                         total_market_value += market_value
                         total_pnl += pnl
                         total_cost += position['cost']
-
+                        cumulative_dividend = current_positions[market]['dvd_pl_total']
+                        spx_rtn = market_comp_rtn["^GSPC"]
+                        bench_rtn = market_comp_rtn["ES=F"] if spx_rtn == 0 else spx_rtn
                         daily_pnl_data.append({
                             'market': market,
                             'price_change': price_change,
@@ -222,17 +358,34 @@ class Calculator:
                             'dividend': dividend,
                             'trade_price': position['trade_price'],
                             'asset_type': position['asset_type'],
-                            'region': position['regions']
+                            'region': position['regions'],
+                            "Strategy": (market if pd.isna(position.get("strategy")) else position.get("strategy")),
+                            'cumulative dividend': cumulative_dividend,
+                            'S&P 500 daily return': bench_rtn
                         })
+                    else:
+                        print(f"获取{ticker}数据时不足2天")
                 except Exception as e:
                     print(f"获取{ticker}数据时发生错误: {e}")
-        region_pnl = defaultdict(float)
-        for entry in daily_pnl_data:
-            region_pnl[entry['region']] += entry['daily_pnl']
-        region_pnl = dict(region_pnl)
+        region_pnl = aggregate_daily_pnl(daily_pnl_data, "region")
+        region_market_value = aggregate_daily_pnl(daily_pnl_data, "region", pnl_key = 'market_value')
+        strategy_pnl = aggregate_daily_pnl(
+            daily_pnl_data, "Strategy", fallback_key="market"
+        )
+        strategy_market_value = aggregate_daily_pnl(daily_pnl_data, "Strategy", pnl_key = 'market_value', fallback_key="market")
 
-        return daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, \
-            total_market_value_usd, total_market_value_gbp
+        return (
+            daily_pnl_data,
+            total_market_value,
+            total_pnl,
+            total_cost,
+            region_pnl,
+            region_market_value,
+            strategy_pnl,
+            strategy_market_value,
+            total_market_value_usd,
+            total_market_value_gbp,
+        )
 
     def calculate_realized_pnl(self, trades_df: pd.DataFrame, markets: List[str], realized_positions) -> float:
         """

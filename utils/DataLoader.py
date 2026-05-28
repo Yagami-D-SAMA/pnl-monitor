@@ -3,21 +3,22 @@ import yfinance as yf
 from datetime import datetime
 import os
 import pickle
+from utils.Calculator import is_weekend, resolve_latest_prev_day
 
 class DataLoader:
-    def __init__(self, investment_dir=None):
+    def __init__(self, investment_dir, trade_history_paths, enum_path, dvd_history_path, target_date=None):
         """初始化DataLoader类
         
         Args:
             investment_dir (str, optional): 投资数据目录路径. Defaults to None.
         """
         self.investment_dir = investment_dir
-        self.trades_df = None
-        self.enum_df = None
-        self.dvd_history_path = None
-        self.market_ticker_map = None
+        self.trades_df = pd.concat([pd.read_csv(path) for path in trade_history_paths])
+        self.enum_df = pd.read_csv(enum_path)
+        self.dvd_df = pd.read_csv(dvd_history_path)
+        self.target_date = target_date
 
-    def load_trade_data(self, trade_history_paths, enum_path, dvd_history_path, target_date=None):
+    def load_trade_data(self):
         """加载交易数据和枚举数据
         
         Args:
@@ -29,10 +30,6 @@ class DataLoader:
             tuple: (trades_df, enum_df)
         """
         try:
-            self.trades_df = pd.concat([pd.read_csv(path) for path in trade_history_paths])
-            self.enum_df = pd.read_csv(enum_path)
-            self.dvd_df = pd.read_csv(dvd_history_path)
-            
             # 数据预处理
             self.trades_df['Price'] = self.trades_df['Price'] / 100
             self.trades_df['TextDate'] = pd.to_datetime(self.trades_df['TextDate'], format='%d/%m/%Y')
@@ -41,11 +38,11 @@ class DataLoader:
             self.normalize_dvd_market_names()
 
             # 如果提供了target_date，过滤掉晚于target_date的交易
-            if target_date is not None:
-                if isinstance(target_date, str):
-                    target_date = pd.to_datetime(target_date)
-                self.trades_df = self.trades_df[self.trades_df['TextDate'] <= target_date]
-                self.dvd_df = self.dvd_df[self.dvd_df['TextDate'] <= target_date]
+            if self.target_date is not None:
+                if isinstance(self.target_date, str):
+                    target_date = pd.to_datetime(self.target_date)
+                self.trades_df = self.trades_df[self.trades_df['TextDate'] <= self.target_date]
+                self.dvd_df = self.dvd_df[self.dvd_df['TextDate'] <= self.target_date]
             
             return self.trades_df, self.enum_df, self.dvd_df
         except Exception as e:
@@ -91,12 +88,12 @@ class DataLoader:
             return None
             
         markets = self.trades_df['Market'].unique()
-        self.market_ticker_map = {}
+        market_ticker_map = {}
         for market in markets:
             ticker = self.enum_df[self.enum_df['Name'] == market]['Ticker'].iloc[0] if len(self.enum_df[self.enum_df['Name'] == market]) > 0 else None
             if ticker:
-                self.market_ticker_map[market] = ticker
-        return self.market_ticker_map
+                market_ticker_map[market] = ticker
+        return market_ticker_map
 
     @staticmethod
     def get_previous_business_day(target_date):
@@ -132,6 +129,52 @@ class DataLoader:
             return float(GBPUSD_FX_Hist['Close'].iloc[-1]), float(GBPUSD_FX_Hist['Close'].iloc[-2])
         return 1.0, 1.0
 
+    @staticmethod
+    def get_market_comp_rtn(target_date, tickers, prev_date):
+        """
+        获取一组ticker在target_date当天的回报率，并校验前一日日期是否符合预期
+
+        Args:
+            target_date (datetime): 目标日期
+            tickers (list): ticker列表
+            prev_date (datetime): 期望的前一工作日（T-1）
+
+        Returns:
+            dict: {ticker: return}，return为小数（例如0.012表示1.2%）
+        """
+        rtn_dict = {}
+
+        for ticker in tickers:
+            try:
+                inst = yf.Ticker(ticker)
+                hist_data = inst.history(start=(target_date - pd.Timedelta(days=20)), end=target_date)
+
+                if len(hist_data.index) >= 2:
+                    latest_date, prev_day, ok = resolve_latest_prev_day(hist_data, target_date, prev_date, ticker)
+                    if latest_date is None:
+                        rtn_dict[ticker] = None
+                        continue
+
+                    if not ok:
+                        rtn_dict[ticker] = None
+                        continue
+
+                    current_price = float(hist_data.loc[latest_date, 'Close'])
+                    prev_price = float(hist_data.loc[prev_day, 'Close'])
+
+                    if prev_price != 0:
+                        rtn_dict[ticker] = (current_price / prev_price) - 1
+                    else:
+                        rtn_dict[ticker] = None
+                else:
+                    rtn_dict[ticker] = None
+
+            except Exception as e:
+                print(f"{ticker} 获取数据失败: {e}")
+                rtn_dict[ticker] = None
+
+        return rtn_dict
+
     def save_results(self, daily_pnl_result, trade_history_paths):
         """保存结果到文件
         
@@ -149,7 +192,18 @@ class DataLoader:
         source_prefix = '_'.join(path.split('TradeHistory-')[1].split('.')[0] for path in trade_history_paths)
         pnl_file = os.path.join(daily_pnl_dir, 
                                f'daily_pnl_{source_prefix}_{daily_pnl_result["date"].strftime("%Y%m%d")}.pkl')
-        
+
+        # 1. 先检查文件是否已存在
+        if os.path.exists(pnl_file):
+            ans = input(
+                f"文件已存在：{pnl_file}\n"
+                f"是否覆盖？输入 'y' 确认覆盖，其他任意键取消保存："
+            ).strip().lower()
+            if ans != 'y':
+                print("用户选择不覆盖，跳过保存。")
+                return
+
+        # 2. 用户同意覆盖或文件不存在时，再真正写入
         with open(pnl_file, 'wb') as f:
             pickle.dump(daily_pnl_result, f)
         print(f"\n已保存当日盈亏数据到: {pnl_file}")

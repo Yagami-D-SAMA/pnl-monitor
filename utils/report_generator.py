@@ -1,4 +1,51 @@
-def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl):
+def _print_pnl_summary(title: str, pnl_by_group: dict, total_market_value: float) -> None:
+    if not pnl_by_group or not total_market_value:
+        return
+
+    # 先计算 bps，再按 bps 排序（高 → 低）
+    rows = []
+    for name, pnl in pnl_by_group.items():
+        bps = (pnl / total_market_value) * 10000
+        rows.append((name, pnl, bps))
+    rows.sort(key=lambda x: x[2], reverse=True)
+
+    # 不同标题用不同的 name 列宽
+    name_width = 50 if "Strategy" in title else 15
+
+    print(f"\n{title}:")
+    print("-" * (name_width + 32))
+    print(f"{'Name':<{name_width}}  {'PnL(GBP)':>14}  {'PnL(bps)':>12}")
+    print("-" * (name_width + 32))
+
+    for name, pnl, bps in rows:
+        print(f"{name:<{name_width}}  {pnl:>14,.2f}  {bps:>12,.2f}")
+
+    print("-" * (name_width + 32))
+
+def _print_market_value_summary(title: str, mv_by_group: dict, total_market_value: float) -> None:
+    if not mv_by_group or not total_market_value:
+        return
+
+    rows = []
+    for name, mv in mv_by_group.items():
+        pct = (mv / total_market_value) * 100
+        rows.append((name, mv, pct))
+    rows.sort(key=lambda x: x[1], reverse=True)
+
+    name_width = 50 if "Strategy" in title else 15
+
+    print(f"\n{title}:")
+    print("-" * (name_width + 24))
+    print(f"{'Name':<{name_width}}  {'Market Value(GBP)':>14} {'Market Value %':>16}")
+    print("-" * (name_width + 24))
+
+    for name, mv, pct in rows:
+        print(f"{name:<{name_width}}  {mv:>14,.2f} {pct:>16,.2f}%")
+
+    print("-" * (name_width + 24))
+
+def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl=None, region_market_value=None,
+                    strategy_pnl=None, strategy_market_value=None):
     """生成报告"""
     # 获取全球指数回报率
     # from . import calculate_global_indices_return
@@ -13,15 +60,16 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     print(f"\n持仓情况 ({latest_date.strftime('%Y-%m-%d')}):")
     print("-" * 320)
     print(f"{'当前市场':<50} {'当前持仓':>10} {'当前价格(LC)':>8} {'平均买入价格(LC)':>12} {'成本(GBP)':>10} {'累计独立损益(%)':>15} {'累计盈亏(GBP)':>15}"
-          f"{'累计外汇损益(%)':>15} {'累计外汇损益(GBP)':>15} {'当前市值(GBP)':>15} {'市值占比(%)':>10} {'持有天数':>7}")
+          f"{'累计外汇损益(%)':>15} {'累计外汇损益(GBP)':>15} {'当前市值(GBP)':>15} {'市值占比(%)':>10} {'持有天数':>7} {'累计分红':>7}")
     print("-" * 320)
     
     for data in sorted_holdings:
         market_value_contribution = (data['market_value'] / total_market_value * 100) if total_market_value != 0 else 0
         standalone_bps = data['standalone_bps'] * 100
+        cumulative_dividend_text = f"{data['cumulative dividend']:>9,.2f}GBP" if 'cumulative dividend' in data else ""
         print(f"{data['market']:<50} {data['position']:>12.0f} {data['current_price']:>10,.2f} {data['trade_price']:>15,.2f} {data['cost']:>15,.2f}GBP"
               f"{standalone_bps:>12,.2f}% {data['pnl']:>15,.2f}GBP {data['cumulative_fx_return']:>15,.2f}% {data['cumulative_fx_pnl']:>18,.2f}GBP"
-              f"{data['market_value']:>15,.2f}GBP {market_value_contribution:>10,.2f}% {data['initial_holding_days']:>9} days")
+              f"{data['market_value']:>15,.2f}GBP {market_value_contribution:>10,.2f}% {data['initial_holding_days']:>9} days {cumulative_dividend_text}")
     
     print("-" * 320)
     print(f"总市值: {total_market_value:>15,.2f}")
@@ -72,18 +120,20 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     print(f"{'当日贡献度:':<10} {portfolio_return:.2f}bps")
     print(f"{'当日外汇贡献度:':<8} {sum(data['fx_pnl'] for data in daily_pnl_data) / total_market_value * 10000:.2f}bps")
     print(f"{'当日非外汇贡献度:':<10} {sum(data['non_fx_pnl'] for data in daily_pnl_data) / total_market_value * 10000:.2f}bps")
+    sp500_ret = daily_pnl_data[0].get('S&P 500 daily return') if daily_pnl_data else None
+    if sp500_ret is not None:
+        print(f"{'当日S&P500贡献度:':<10} {sp500_ret * 10000:.2f}bps")
     print(f"{'当日总盈亏:':<10} {total_daily_pnl:.2f}GBP")
     print(f"{'当日外汇盈亏:':<8} {sum(data['fx_pnl'] for data in daily_pnl_data):.2f}GBP")
     print(f"{'当日非外汇盈亏:':<6} {sum(data['non_fx_pnl'] for data in daily_pnl_data):.2f}GBP")
     print(f"{'当日总市值:':<10} {total_market_value:,.2f}GBP")
 
-    # 添加region_pnl展示
-    if region_pnl:
-        print("\nRegion PnL Summary:")
-        print("-" * 40)
-        for region, pnl in region_pnl.items():
-            print(f"Region: {region:<20} PnL: {pnl:>12,.2f} GBP")
-        print("-" * 40)
+    # 在 generate_report 里：
+    _print_pnl_summary("Region PnL Summary", region_pnl, total_market_value)
+    _print_pnl_summary("Strategy PnL Summary", strategy_pnl, total_market_value)
+
+    _print_market_value_summary("Region Market Value Summary", region_market_value, total_market_value)
+    _print_market_value_summary("Strategy Market Value Summary", strategy_market_value, total_market_value)
     
     # 添加全球指数对比信息
     # print("\n全球主要指数对比分析:")
@@ -105,7 +155,7 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     #             print(f"{'相对{index_name}超额收益:':>30} {excess_return:>15,.2f}")
     # print("-" * 100)
     
-    return {
+    result =  {
         'date': latest_date,
         'total_daily_pnl': total_daily_pnl,
         'total_market_value': total_market_value,
@@ -115,6 +165,9 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
         'realized_pnl': realized_pnl,
         'regional_pnl': region_pnl
     }
+    if region_pnl is not None:
+        result['regional_pnl'] = region_pnl
+    return result
 
 if __name__ == "__main__":
     # 测试报告生成功能
