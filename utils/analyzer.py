@@ -501,6 +501,70 @@ def parse_ticker_db_date(path: Path) -> datetime:
         raise ValueError(f"无法从文件名解析日期: {path.name}")
     return datetime.strptime(m.group(1), "%Y%m%d")
 
+def load_active_stock_universe(ticker_h5=None, as_of_date=None):
+    ticker_db = OUTPUT_DIR / "tickers_NYSE+NASDAQ_20260519_165904.h5"
+    h5_path = Path(ticker_h5) if ticker_h5 else ticker_db
+    db_as_of = as_of_date or parse_ticker_db_date(h5_path)
+    # read_h5 会打印摘要；若不想刷屏，可用下面静默版：
+    tickers = pd.read_hdf(h5_path, key=H5_KEY)
+    # tickers = read_h5(h5_path)
+    # 通常只要上市、普通股
+    universe = tickers[
+        (tickers["status"] == "Active")
+        & (tickers["asset_type"].str.upper() == "STOCK")
+    ].copy()
+    return universe, db_as_of, h5_path
+
+def select_universe_symbols_by_industry(universe, yf_industry="Banks - Diversified"):
+    universe_industry = universe[universe["yf_industry"] == yf_industry].copy()
+    universe_industry = universe_industry[["symbol"]].copy()
+    return universe_industry
+
+def export_industry_price_returns(
+    yf_industry="Banks - Diversified",
+    ticker_h5=None,
+    as_of_date=None,
+    target_date=None,
+    lookback_days=5,
+    output_path=None,
+):
+    universe, db_as_of, h5_path = load_active_stock_universe(ticker_h5=ticker_h5, as_of_date=as_of_date)
+    universe_industry = select_universe_symbols_by_industry(universe, yf_industry=yf_industry)
+    if target_date is None:
+        target_date = datetime.today()
+    elif isinstance(target_date, str):
+        target_date = datetime.strptime(target_date, '%Y-%m-%d')
+    start_date = target_date - pd.Timedelta(days=lookback_days)
+    all_history = []
+    for ticker in universe_industry["symbol"].dropna().unique().tolist():
+        try:
+            stock = yf.Ticker(ticker)
+            hist_data = stock.history(start=start_date, end=target_date)
+            if hist_data.empty:
+                print(f"{ticker}: no history data")
+                continue
+            hist_data = hist_data.copy()
+            hist_data["symbol"] = ticker
+            hist_data["daily_return"] = hist_data["Close"].pct_change()
+            hist_data = hist_data.reset_index()
+            all_history.append(hist_data)
+        except Exception as e:
+            print(f"{ticker}: failed to fetch history data: {e}")
+    if all_history:
+        price_returns = pd.concat(all_history, ignore_index=True)
+    else:
+        price_returns = pd.DataFrame(columns=["Date", "symbol", "Close", "daily_return"])
+    if output_path is None:
+        industry_slug = re.sub(r"[^A-Za-z0-9]+", "_", yf_industry).strip("_")
+        output_path = OUTPUT_DIR / f"{industry_slug}_price_returns_{target_date.strftime('%Y%m%d')}.csv"
+    else:
+        output_path = Path(output_path)
+    price_returns.to_csv(output_path, index=False)
+    print(f"Ticker universe as of {db_as_of.date()}: {len(universe):,} symbols from {h5_path}")
+    print(f"{yf_industry}: {len(universe_industry):,} symbols")
+    print(f"Exported price returns to {output_path}")
+    return universe_industry, price_returns, output_path
+
 def stock_value_factor(ticker_h5=None, as_of_date=None, fiscal_year=2025, fiscal_period="q4", limit=None):
     ticker_db = OUTPUT_DIR / "tickers_NYSE+NASDAQ_20260519_165904.h5"
     h5_path = ticker_h5 or ticker_db

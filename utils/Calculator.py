@@ -264,7 +264,7 @@ class Calculator:
                 ticker = market_ticker_map[market]
                 try:
                     stock = yf.Ticker(ticker)
-                    hist_data = stock.history(start=(target_date - pd.Timedelta(days=20)), end=target_date)
+                    hist_data = stock.history(start=(target_date - pd.Timedelta(days=5)), end=target_date)
 
                     if len(hist_data.index) >= 2:
                         latest_date, prev_day, ok = resolve_latest_prev_day(hist_data, target_date, prev_date, ticker)
