@@ -36,7 +36,7 @@ def get_previous_business_day(target_date: datetime) -> datetime:
         prev_date -= timedelta(days=1)
     return prev_date
 
-def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True) -> object:
+def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True, overwrite_existing=None) -> object:
     """主函数：分析投资组合"""
     # 设置目标日期
     if target_date is None:
@@ -135,7 +135,7 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         daily_pnl_result = generate_report(
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, target_date, region_pnl, region_market_value, strategy_pnl, strategy_market_value)
         # 保存结果
-        data_loader.save_results(daily_pnl_result, trade_history_paths)
+        data_loader.save_results(daily_pnl_result, trade_history_paths, overwrite_existing=overwrite_existing)
 
     except Exception as e:
         print(f"分析过程中发生错误: {e}")

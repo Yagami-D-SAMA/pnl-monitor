@@ -175,7 +175,7 @@ class DataLoader:
 
         return rtn_dict
 
-    def save_results(self, daily_pnl_result, trade_history_paths):
+    def save_results(self, daily_pnl_result, trade_history_paths, overwrite_existing=None):
         """保存结果到文件
         
         Args:
@@ -195,13 +195,19 @@ class DataLoader:
 
         # 1. 先检查文件是否已存在
         if os.path.exists(pnl_file):
-            ans = input(
-                f"文件已存在：{pnl_file}\n"
-                f"是否覆盖？输入 'y' 确认覆盖，其他任意键取消保存："
-            ).strip().lower()
-            if ans != 'y':
-                print("用户选择不覆盖，跳过保存。")
+            print(f"文件已存在：{pnl_file}")
+            if overwrite_existing is False:
+                print("UI 选择不覆盖，跳过保存。")
                 return
+            if overwrite_existing is True:
+                print("UI 选择覆盖，继续保存。")
+            else:
+                ans = input(
+                    f"是否覆盖？输入 'y' 确认覆盖，其他任意键取消保存："
+                ).strip().lower()
+                if ans != 'y':
+                    print("用户选择不覆盖，跳过保存。")
+                    return
 
         # 2. 用户同意覆盖或文件不存在时，再真正写入
         with open(pnl_file, 'wb') as f:
