@@ -4,6 +4,7 @@ import os
 import pickle
 from tabulate import tabulate
 import yfinance as yf
+import matplotlib.pyplot as plt
 from utils.Calculator import is_weekend
 from pathlib import Path
 import re
@@ -247,10 +248,13 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         
         # 计算指数累计回报率
         index_returns = {}
+        sp500_hist_data = pd.DataFrame()
         for index_name, ticker in indices.items():
             try:
                 index = yf.Ticker(ticker)
                 hist_data = index.history(start=start_date - pd.Timedelta(days=1), end=end_date + pd.Timedelta(days=1))
+                if index_name == "S&P 500":
+                    sp500_hist_data = hist_data.copy()
                 
                 if len(hist_data.index) >= 2:
                     start_price = float(hist_data.loc[hist_data.index[0], 'Close'])
@@ -301,6 +305,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
                     all_daily_data.append({
                         'date': date,
                         'contribution': contribution,
+                        'fx_contribution': fx_contribution,
                         'total_daily_pnl': daily_pnl_result['total_daily_pnl'],
                         'total_fx_pnl': daily_pnl_result['total_fx_pnl'],
                         'total_non_fx_pnl': daily_pnl_result['total_non_fx_pnl'],
@@ -325,10 +330,59 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             days_held = (end_date - start_date).days
             T = days_held / 365.25
             annualized_return = ((1 + cumulative_contribution/10000) ** (1 / T) - 1) * 100# accounting for leap years
+            contribution_series = pd.Series([data['contribution'] for data in all_daily_data]) / 10000
+            fx_contribution_series = pd.Series([data['fx_contribution'] for data in all_daily_data]) / 10000
+            annualization_factor = (len(all_daily_data) / T) ** 0.5
+            annualized_contribution_vol = contribution_series.std() * annualization_factor * 100
+            annualized_fx_contribution_vol = fx_contribution_series.std() * annualization_factor * 100
+
+            contribution_plot_data = pd.DataFrame(all_daily_data).sort_values('date')
+            contribution_plot_data['cumulative_return'] = (1 + contribution_plot_data['contribution'] / 10000).cumprod()
+            contribution_plot_data['cumulative_return'] = (
+                contribution_plot_data['cumulative_return'] / contribution_plot_data['cumulative_return'].iloc[0]
+            )
+
+            plt.figure(figsize=(12, 6))
+            plt.plot(
+                contribution_plot_data['date'],
+                contribution_plot_data['cumulative_return'],
+                label='Contribution Series',
+                linewidth=2
+            )
+
+            if not sp500_hist_data.empty:
+                sp500_plot_data = sp500_hist_data.copy()
+                sp500_plot_data.index = pd.to_datetime(sp500_plot_data.index).tz_localize(None)
+                sp500_plot_data = sp500_plot_data[
+                    (sp500_plot_data.index >= start_date) & (sp500_plot_data.index <= end_date)
+                ].copy()
+                if not sp500_plot_data.empty:
+                    sp500_plot_data['cumulative_return'] = sp500_plot_data['Close'] / sp500_plot_data['Close'].iloc[0]
+                    plt.plot(
+                        sp500_plot_data.index,
+                        sp500_plot_data['cumulative_return'],
+                        label='S&P 500',
+                        linewidth=2
+                    )
+                else:
+                    print("指定日期范围内没有S&P 500数据，图中只显示Contribution Series")
+            else:
+                print("无法获取S&P 500数据，图中只显示Contribution Series")
+
+            plt.title(f"Cumulative Return ({start_date_str} to {end_date_str})")
+            plt.xlabel("Date")
+            plt.ylabel("Cumulative Return (Base = 1)")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.show()
+
             print(f"\n汇总信息:")
             print("-" * 80)
             print(f"期间累计总贡献度: {cumulative_contribution:>15,.2f} bps")
             print(f"年化总贡献度: {annualized_return:>15,.2f}%")
+            print(f"年化总贡献度波动率: {annualized_contribution_vol:>10,.2f}%")
+            print(f"年化外汇贡献度波动率: {annualized_fx_contribution_vol:>8,.2f}%")
             print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间非外汇累计贡献度: {cumulative_contribution - cumulative_fx_contribution:>12,.2f} bps")
             print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
