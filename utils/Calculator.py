@@ -298,7 +298,7 @@ class Calculator:
 
                         # 价格调整
                         # todo find a better way to treat below ticker price adj
-                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L', 'STHS.L', 'COPG.L'}:
+                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L', 'STHS.L', 'COPG.L', 'SMGB.L'}:
                             current_price /= 100
                             prev_price /= 100
                             price_change /= 100

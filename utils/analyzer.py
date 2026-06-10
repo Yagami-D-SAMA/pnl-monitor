@@ -346,7 +346,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             plt.plot(
                 contribution_plot_data['date'],
                 contribution_plot_data['cumulative_return'],
-                label='Contribution Series',
+                label='Portfolio',
                 linewidth=2
             )
 
