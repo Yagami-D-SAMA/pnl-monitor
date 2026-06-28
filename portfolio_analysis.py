@@ -10,8 +10,17 @@ from utils.analyzer import (
     run_historical_analysis,
     stock_monitor,
     stock_value_factor,
-    export_industry_price_returns
+    export_industry_price_returns,
+    analyze_portfolio_industry_percentiles,
+    portfolio_drawdown_monitor
 )
+
+def run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL'):
+    return portfolio_drawdown_monitor(
+        running_date=running_date,
+        lookback_period=lookback_period,
+        data_source=data_source,
+    )
 
 if __name__ == "__main__":
     # 用法示例：
@@ -21,16 +30,18 @@ if __name__ == "__main__":
     # todo build value factor construction
     # todo ETF price comparison
     # todo display top 10 constituents perf of main stream indices every day
-    # todo daily return distribution with respect to industry, peer analysis
-    # todo China PMI data analysis
-    # todo 05/05/2026 need to re calculate price
-    analyze_portfolio('2026-06-09',data_source='ALL', asset_type=True)
+    # todo China US EU PMI/CPI/Macro data analysis
+    # todo improve UI user to zoom in trade for detail
+    # todo '2026-06-26', need to re calculate price
+    analyze_portfolio('2026-06-26',data_source='ALL', asset_type=True)
     # stock_monitor(90)
+    # run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL')
     # export_industry_price_returns()
+    # analyze_portfolio_industry_percentiles()
     # stock_value_factor()
     # 3. 查看历史PnL
-    # load_historical_pnl('2026-06-09', data_source='ALL')
+    # load_historical_pnl('2026-06-22', data_source='ALL')
     # 4. 计算累计贡献度
-    # ('2025-12-31', '2026-06-09', data_source='ALL')
+    # calculate_cumulative_contribution('2025-12-31', '2026-06-26', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2026-03-09', '2026-03-13')

@@ -37,26 +37,68 @@ def get_previous_business_day(target_date: datetime) -> datetime:
         prev_date -= timedelta(days=1)
     return prev_date
 
-def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True, overwrite_existing=None) -> object:
-    """主函数：分析投资组合"""
-    # 设置目标日期
+def _read_slickcharts_weight_table(url: str) -> pd.DataFrame:
+    from io import BytesIO
+    from urllib.request import Request, urlopen
+
+    request = Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0 Safari/537.36"
+            )
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        html = response.read()
+
+    tables = pd.read_html(BytesIO(html))
+    for table in tables:
+        table.columns = [str(col).strip() for col in table.columns]
+        if {"Company", "Symbol", "Weight"}.issubset(table.columns):
+            return table
+
+    raise ValueError(f"No constituent weight table found from {url}")
+
+def display_index_top_constituents_performance(top_n: int = 10) -> None:
+    """Display today's top-weighted S&P 500 and Nasdaq 100 constituent performance."""
+    index_sources = {
+        "S&P 500": "https://www.slickcharts.com/sp500",
+        "NASDAQ 100": "https://www.slickcharts.com/nasdaq100",
+    }
+
+    for index_name, url in index_sources.items():
+        try:
+            constituents = _read_slickcharts_weight_table(url).head(top_n).copy()
+            display_columns = [
+                col for col in ["Company", "Symbol", "Weight", "Price", "Chg", "% Chg"]
+                if col in constituents.columns
+            ]
+            print(f"\n{index_name} 当天weight排名Top {top_n} constituents daily performance:")
+            print("-" * 100)
+            print(tabulate(
+                constituents[display_columns],
+                headers="keys",
+                tablefmt="fancy_grid",
+                showindex=False,
+                disable_numparse=True,
+            ))
+        except Exception as e:
+            print(f"{index_name} Top {top_n} constituents performance 获取失败: {e}")
+
+def _resolve_target_date(target_date: object = None) -> datetime:
     if target_date is None:
         target_date = datetime.today()
     elif isinstance(target_date, str):
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
-    # force time to 23:30 each day
-    target_date = target_date.replace(hour=23, minute=30, second=0, microsecond=0)
-    prev_date = get_previous_business_day(target_date)
+    return target_date.replace(hour=23, minute=30, second=0, microsecond=0)
 
-    # 设置文件路径
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    investment_dir = os.path.join(base_dir, 'investment')
+def _resolve_trade_history_paths(investment_dir: str, data_source: object):
     trade_history_path_SXAFI = os.path.join(investment_dir, 'TradeHistory-SXAFI.csv')
     trade_history_path_SX9Q9 = os.path.join(investment_dir, 'TradeHistory-SX9Q9.csv')
-    dvd_history_path = os.path.join(investment_dir, 'DvdHistory.csv')
-    enum_path = os.path.join(investment_dir, 'enum.csv')
 
-    # 确定要处理的文件
     trade_history_paths = []
     if data_source == 'SXAFI':
         trade_history_paths.append(trade_history_path_SXAFI)
@@ -66,37 +108,82 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         trade_history_paths.extend([trade_history_path_SXAFI, trade_history_path_SX9Q9])
     else:
         print(f"错误：无效的数据源选择 {data_source}，请使用 'SXAFI'、'SX9Q9' 或 'ALL'")
-        return
+        return None
 
-    # 检查文件是否存在
+    return trade_history_paths
+
+def _load_portfolio_context(target_date: object = None, data_source: object = None):
+    target_date = _resolve_target_date(target_date)
+    prev_date = get_previous_business_day(target_date)
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    investment_dir = os.path.join(base_dir, 'investment')
+    dvd_history_path = os.path.join(investment_dir, 'DvdHistory.csv')
+    enum_path = os.path.join(investment_dir, 'enum.csv')
+    trade_history_paths = _resolve_trade_history_paths(investment_dir, data_source)
+    if trade_history_paths is None:
+        return None
+
     for path in trade_history_paths:
         if not os.path.exists(path):
             print(f"错误：无法找到交易历史文件 - {path}")
-            return
+            return None
     if not os.path.exists(enum_path):
         print(f"错误：无法找到枚举文件 - {enum_path}")
-        return
+        return None
     if not os.path.exists(dvd_history_path):
-        print(f"错误：无法找到枚举文件 - {dvd_history_path}")
-        return
+        print(f"错误：无法找到股息历史文件 - {dvd_history_path}")
+        return None
 
+    from . import DataLoader
+    from . import Calculator
+
+    data_loader = DataLoader(investment_dir, trade_history_paths, enum_path, dvd_history_path, target_date)
+    trades_df, enum_df, dvd_df = data_loader.load_trade_data()
+    if trades_df is None or enum_df is None or dvd_df is None:
+        return None
+
+    market_ticker_map = data_loader.get_market_ticker_map()
+    calculator = Calculator()
+    current_positions, closed_positions = calculator.calculate_positions(trades_df, dvd_df)
+
+    return {
+        "target_date": target_date,
+        "prev_date": prev_date,
+        "investment_dir": investment_dir,
+        "trade_history_paths": trade_history_paths,
+        "data_loader": data_loader,
+        "trades_df": trades_df,
+        "enum_df": enum_df,
+        "dvd_df": dvd_df,
+        "market_ticker_map": market_ticker_map,
+        "calculator": calculator,
+        "current_positions": current_positions,
+        "closed_positions": closed_positions,
+    }
+
+def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True, overwrite_existing=None) -> object:
+    """主函数：分析投资组合"""
     try:
         # 加载数据
         from . import generate_report
-        from . import DataLoader
-        from . import Calculator
-        data_loader = DataLoader(investment_dir, trade_history_paths, enum_path, dvd_history_path, target_date)
-        trades_df, enum_df, dvd_df  = data_loader.load_trade_data()
-        if trades_df is None or enum_df is None or dvd_df is None:
+        portfolio_context = _load_portfolio_context(target_date, data_source)
+        if portfolio_context is None:
             return
-        # 获取市场和ticker映射
-        market_ticker_map = data_loader.get_market_ticker_map()
-        # 计算持仓
-        calculator = Calculator()
-        current_positions, closed_positions = calculator.calculate_positions(trades_df, dvd_df)
+
+        target_date = portfolio_context["target_date"]
+        prev_date = portfolio_context["prev_date"]
+        trade_history_paths = portfolio_context["trade_history_paths"]
+        data_loader = portfolio_context["data_loader"]
+        trades_df = portfolio_context["trades_df"]
+        market_ticker_map = portfolio_context["market_ticker_map"]
+        calculator = portfolio_context["calculator"]
+        current_positions = portfolio_context["current_positions"]
+        closed_positions = portfolio_context["closed_positions"]
+
         # 获取汇率数据
         GBPUSD_FX, GBPUSD_FX_prev = data_loader.get_fx_rates(target_date)
-        market_comp_rtn = data_loader.get_market_comp_rtn(target_date,['^GSPC', 'ES=F'], prev_date)
+        market_comp_rtn = data_loader.get_market_comp_rtn(target_date,['^GSPC', 'ES=F', '^NDX'], prev_date)
         # 计算市场价值和盈亏
         daily_pnl_data, total_market_value, total_pnl, total_cost, region_pnl, region_market_value, strategy_pnl, strategy_market_value, total_market_value_usd, \
             total_market_value_gbp = calculator.calculate_market_values(current_positions, market_ticker_map,
@@ -137,9 +224,184 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, target_date, region_pnl, region_market_value, strategy_pnl, strategy_market_value)
         # 保存结果
         data_loader.save_results(daily_pnl_result, trade_history_paths, overwrite_existing=overwrite_existing)
+        try:
+            run_constituents = input(
+                "是否显示S&P500和NASDAQ当天weight排名Top 10 constituents的daily performance? (y/N): "
+            ).strip().lower()
+        except EOFError:
+            run_constituents = "n"
+
+        if run_constituents in {"y", "yes", "是"}:
+            display_index_top_constituents_performance(top_n=10)
 
     except Exception as e:
         print(f"分析过程中发生错误: {e}")
+
+def portfolio_drawdown_monitor(running_date: object = None, lookback_period: int = 90, data_source: object = 'ALL') -> pd.DataFrame:
+    """Monitor max drawdown for current portfolio positions over a lookback period."""
+    portfolio_context = _load_portfolio_context(running_date, data_source)
+    if portfolio_context is None:
+        return pd.DataFrame()
+
+    running_date = portfolio_context["target_date"]
+    current_positions = portfolio_context["current_positions"]
+    market_ticker_map = portfolio_context["market_ticker_map"]
+    start_date = running_date - pd.Timedelta(days=lookback_period)
+    end_date = running_date + pd.Timedelta(days=1)
+
+    drawdown_rows = []
+    for market, position_data in current_positions.items():
+        ticker = market_ticker_map.get(market)
+        if not ticker:
+            print(f"{market}: enum.csv 中没有ticker mapping，跳过")
+            continue
+
+        try:
+            stock = yf.Ticker(ticker)
+            hist_data = stock.history(start=start_date, end=end_date)
+            if hist_data.empty or "Close" not in hist_data.columns:
+                print(f"{ticker}: 没有可用价格数据，跳过")
+                continue
+
+            close_prices = hist_data["Close"].dropna()
+            if close_prices.empty:
+                print(f"{ticker}: Close价格为空，跳过")
+                continue
+
+            running_peak = close_prices.cummax()
+            drawdown = close_prices / running_peak - 1
+            max_drawdown = drawdown.min()
+            trough_date = drawdown.idxmin()
+            peak_date = close_prices.loc[:trough_date].idxmax()
+            current_drawdown = close_prices.iloc[-1] / running_peak.iloc[-1] - 1
+            info = stock.info or {}
+            fifty_two_week_low = info.get("fiftyTwoWeekLow")
+            fifty_two_week_high = info.get("fiftyTwoWeekHigh")
+            if fifty_two_week_low is None or fifty_two_week_high is None:
+                print(f"{ticker}: yf.info 中没有 fiftyTwoWeekLow/fiftyTwoWeekHigh")
+            if (
+                fifty_two_week_low is not None
+                and fifty_two_week_high is not None
+                and fifty_two_week_high > fifty_two_week_low
+            ):
+                fifty_two_week_position_pct = (
+                    (close_prices.iloc[-1] - fifty_two_week_low)
+                    / (fifty_two_week_high - fifty_two_week_low)
+                ) * 100
+            else:
+                fifty_two_week_position_pct = None
+
+            drawdown_rows.append({
+                "market": market,
+                "ticker": ticker,
+                "position": position_data.get("position"),
+                "latest_date": close_prices.index[-1].strftime("%Y-%m-%d"),
+                "latest_price": close_prices.iloc[-1],
+                "peak_date": peak_date.strftime("%Y-%m-%d"),
+                "peak_price": close_prices.loc[peak_date],
+                "trough_date": trough_date.strftime("%Y-%m-%d"),
+                "trough_price": close_prices.loc[trough_date],
+                "max_drawdown": max_drawdown,
+                "current_drawdown": current_drawdown,
+                "52_week_low": fifty_two_week_low,
+                "52_week_high": fifty_two_week_high,
+                "52_week_position_pct": fifty_two_week_position_pct,
+            })
+        except Exception as e:
+            print(f"{ticker}: 计算回撤时发生错误: {e}")
+
+    if not drawdown_rows:
+        print("没有生成任何回撤结果")
+        return pd.DataFrame()
+
+    result_df = pd.DataFrame(drawdown_rows).sort_values("current_drawdown")
+    display_df = result_df.copy()
+    display_df["latest_price"] = display_df["latest_price"].map(lambda x: f"{x:,.2f}")
+    display_df["peak_price"] = display_df["peak_price"].map(lambda x: f"{x:,.2f}")
+    display_df["trough_price"] = display_df["trough_price"].map(lambda x: f"{x:,.2f}")
+    display_df["max_drawdown"] = display_df["max_drawdown"].map(lambda x: f"{x * 100:.2f}%")
+    display_df["current_drawdown"] = display_df["current_drawdown"].map(lambda x: f"{x * 100:.2f}%")
+    display_df["52_week_low"] = display_df["52_week_low"].map(lambda x: "" if pd.isna(x) else f"{x:,.2f}")
+    display_df["52_week_high"] = display_df["52_week_high"].map(lambda x: "" if pd.isna(x) else f"{x:,.2f}")
+    display_df["52_week_position_pct"] = display_df["52_week_position_pct"].map(
+        lambda x: "" if pd.isna(x) else f"{x:.1f}%"
+    )
+
+    print(f"\nPortfolio Drawdown Monitor ({running_date.strftime('%Y-%m-%d')}, lookback {lookback_period} days)")
+    print("-" * 140)
+    print(tabulate(
+        display_df[
+            [
+                "ticker",
+                "market",
+                "position",
+                "latest_date",
+                "latest_price",
+                "peak_date",
+                "peak_price",
+                "trough_date",
+                "trough_price",
+                "max_drawdown",
+                "current_drawdown",
+                "52_week_low",
+                "52_week_high",
+                "52_week_position_pct",
+            ]
+        ],
+        headers="keys",
+        tablefmt="fancy_grid",
+        showindex=False,
+        disable_numparse=True,
+    ))
+
+    plot_df = result_df.dropna(subset=["52_week_low", "52_week_high", "latest_price", "52_week_position_pct"]).copy()
+    plot_df = plot_df[plot_df["52_week_high"] > plot_df["52_week_low"]]
+    if plot_df.empty:
+        print("没有足够的52 week区间数据用于画图")
+    else:
+        plot_df = plot_df.sort_values("current_drawdown")
+        labels = plot_df["ticker"] + " | " + plot_df["market"]
+        y_positions = range(len(plot_df))
+
+        plt.figure(figsize=(12, max(6, len(plot_df) * 0.45)))
+        plt.hlines(
+            y=y_positions,
+            xmin=0,
+            xmax=100,
+            color="#9aa0a6",
+            linewidth=5,
+            alpha=0.8,
+            label="52 Week Range",
+        )
+        plt.scatter(
+            plot_df["52_week_position_pct"],
+            y_positions,
+            color="#d62728",
+            s=80,
+            zorder=3,
+            label="Current Price",
+        )
+        for y, (_, row) in zip(y_positions, plot_df.iterrows()):
+            plt.text(
+                row["52_week_position_pct"],
+                y + 0.15,
+                f"{row['latest_price']:,.2f}",
+                ha="center",
+                fontsize=8,
+            )
+            plt.text(0, y - 0.2, f"L {row['52_week_low']:,.2f}", ha="left", fontsize=8, color="#5f6368")
+            plt.text(100, y - 0.2, f"H {row['52_week_high']:,.2f}", ha="right", fontsize=8, color="#5f6368")
+
+        plt.yticks(list(y_positions), labels)
+        plt.xlim(-3, 103)
+        plt.xlabel("Position in 52 Week Range (Low = 0%, High = 100%)")
+        plt.title(f"Current Price Position vs 52 Week Range ({running_date.strftime('%Y-%m-%d')})")
+        plt.grid(axis="x", alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    return result_df
 
 
 def load_historical_pnl(target_date_str, data_source='ALL'):
@@ -249,12 +511,15 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         # 计算指数累计回报率
         index_returns = {}
         sp500_hist_data = pd.DataFrame()
+        nasdaq_hist_data = pd.DataFrame()
         for index_name, ticker in indices.items():
             try:
                 index = yf.Ticker(ticker)
                 hist_data = index.history(start=start_date - pd.Timedelta(days=1), end=end_date + pd.Timedelta(days=1))
                 if index_name == "S&P 500":
                     sp500_hist_data = hist_data.copy()
+                if index_name == "Nasdaq 100":
+                    nasdaq_hist_data = hist_data.copy()
                 
                 if len(hist_data.index) >= 2:
                     start_price = float(hist_data.loc[hist_data.index[0], 'Close'])
@@ -368,6 +633,25 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
                     print("指定日期范围内没有S&P 500数据，图中只显示Contribution Series")
             else:
                 print("无法获取S&P 500数据，图中只显示Contribution Series")
+
+            if not nasdaq_hist_data.empty:
+                nasdaq_plot_data = nasdaq_hist_data.copy()
+                nasdaq_plot_data.index = pd.to_datetime(nasdaq_plot_data.index).tz_localize(None)
+                nasdaq_plot_data = nasdaq_plot_data[
+                    (nasdaq_plot_data.index >= start_date) & (nasdaq_plot_data.index <= end_date)
+                ].copy()
+                if not nasdaq_plot_data.empty:
+                    nasdaq_plot_data['cumulative_return'] = nasdaq_plot_data['Close'] / nasdaq_plot_data['Close'].iloc[0]
+                    plt.plot(
+                        nasdaq_plot_data.index,
+                        nasdaq_plot_data['cumulative_return'],
+                        label='NASDAQ',
+                        linewidth=2
+                    )
+                else:
+                    print("指定日期范围内没有NASDAQ数据，图中只显示Portfolio和S&P 500")
+            else:
+                print("无法获取NASDAQ数据，图中只显示Portfolio和S&P 500")
 
             plt.title(f"Cumulative Return ({start_date_str} to {end_date_str})")
             plt.xlabel("Date")
@@ -581,6 +865,7 @@ def export_industry_price_returns(
     target_date=None,
     lookback_days=5,
     output_path=None,
+    save_output=True,
 ):
     universe, db_as_of, h5_path = load_active_stock_universe(ticker_h5=ticker_h5, as_of_date=as_of_date)
     universe_industry = select_universe_symbols_by_industry(universe, yf_industry=yf_industry)
@@ -589,11 +874,12 @@ def export_industry_price_returns(
     elif isinstance(target_date, str):
         target_date = datetime.strptime(target_date, '%Y-%m-%d')
     start_date = target_date - pd.Timedelta(days=lookback_days)
+    end_date = target_date + pd.Timedelta(days=1)
     all_history = []
     for ticker in universe_industry["symbol"].dropna().unique().tolist():
         try:
             stock = yf.Ticker(ticker)
-            hist_data = stock.history(start=start_date, end=target_date)
+            hist_data = stock.history(start=start_date, end=end_date)
             if hist_data.empty:
                 print(f"{ticker}: no history data")
                 continue
@@ -613,11 +899,155 @@ def export_industry_price_returns(
         output_path = OUTPUT_DIR / f"{industry_slug}_price_returns_{target_date.strftime('%Y%m%d')}.csv"
     else:
         output_path = Path(output_path)
-    price_returns.to_csv(output_path, index=False)
+    if save_output:
+        price_returns.to_csv(output_path, index=False)
     print(f"Ticker universe as of {db_as_of.date()}: {len(universe):,} symbols from {h5_path}")
     print(f"{yf_industry}: {len(universe_industry):,} symbols")
-    print(f"Exported price returns to {output_path}")
+    if save_output:
+        print(f"Exported price returns to {output_path}")
     return universe_industry, price_returns, output_path
+
+def analyze_portfolio_industry_percentiles(
+    target_date=None,
+    data_source='ALL',
+    ticker_h5=None,
+    as_of_date=None,
+    lookback_days=5,
+):
+    """Calculate each current portfolio ticker's daily return percentile in its yf_industry."""
+    portfolio_context = _load_portfolio_context(target_date, data_source)
+    if portfolio_context is None:
+        return pd.DataFrame()
+
+    target_date = portfolio_context["target_date"]
+    market_ticker_map = portfolio_context["market_ticker_map"]
+    current_positions = portfolio_context["current_positions"]
+
+    universe, db_as_of, h5_path = load_active_stock_universe(ticker_h5=ticker_h5, as_of_date=as_of_date)
+    universe = universe.copy()
+    universe["symbol_upper"] = universe["symbol"].astype(str).str.upper()
+
+    portfolio_rows = []
+    for market, position_data in current_positions.items():
+        ticker = market_ticker_map.get(market)
+        if not ticker:
+            print(f"{market}: no ticker mapping in enum.csv")
+            continue
+
+        ticker_key = str(ticker).upper()
+        ticker_row = universe[universe["symbol_upper"] == ticker_key]
+        if ticker_row.empty:
+            print(f"{ticker}: not found in {h5_path.name}")
+            continue
+
+        yf_industry = ticker_row["yf_industry"].iloc[0]
+        if pd.isna(yf_industry) or not str(yf_industry).strip():
+            print(f"{ticker}: no yf_industry in ticker database")
+            continue
+
+        portfolio_rows.append({
+            "market": market,
+            "ticker": ticker,
+            "position": position_data.get("position"),
+            "yf_industry": yf_industry,
+        })
+
+    if not portfolio_rows:
+        print("No current portfolio positions matched to yf_industry.")
+        return pd.DataFrame()
+
+    portfolio_industries = sorted({row["yf_industry"] for row in portfolio_rows})
+    industry_return_map = {}
+    for yf_industry in portfolio_industries:
+        _, price_returns, _ = export_industry_price_returns(
+            yf_industry=yf_industry,
+            ticker_h5=ticker_h5,
+            as_of_date=as_of_date,
+            target_date=target_date,
+            lookback_days=lookback_days,
+            save_output=False,
+        )
+
+        if price_returns.empty or "daily_return" not in price_returns.columns:
+            print(f"{yf_industry}: no return data")
+            continue
+
+        date_col = "Date" if "Date" in price_returns.columns else "Datetime"
+        price_returns = price_returns.dropna(subset=["daily_return"]).copy()
+        if price_returns.empty:
+            print(f"{yf_industry}: no valid daily_return data")
+            continue
+
+        price_returns[date_col] = pd.to_datetime(price_returns[date_col], utc=True).dt.tz_convert(None)
+        latest_date = price_returns[date_col].max()
+        latest_returns = price_returns[price_returns[date_col] == latest_date].copy()
+        latest_returns["symbol_upper"] = latest_returns["symbol"].astype(str).str.upper()
+        latest_returns = latest_returns.groupby("symbol_upper", as_index=False)["daily_return"].last()
+        latest_returns["percentile"] = latest_returns["daily_return"].rank(pct=True, method="average") * 100
+
+        industry_return_map[yf_industry] = {
+            "latest_date": latest_date,
+            "returns": latest_returns,
+            "industry_size": len(latest_returns),
+        }
+
+    percentile_rows = []
+    for row in portfolio_rows:
+        industry_data = industry_return_map.get(row["yf_industry"])
+        if not industry_data:
+            continue
+
+        ticker_key = str(row["ticker"]).upper()
+        ticker_return_row = industry_data["returns"][industry_data["returns"]["symbol_upper"] == ticker_key]
+        if ticker_return_row.empty:
+            print(f"{row['ticker']}: no latest return found in {row['yf_industry']}")
+            continue
+
+        ticker_return_row = ticker_return_row.iloc[0]
+        percentile_rows.append({
+            "market": row["market"],
+            "ticker": row["ticker"],
+            "position": row["position"],
+            "yf_industry": row["yf_industry"],
+            "return_date": industry_data["latest_date"],
+            "daily_return": ticker_return_row["daily_return"],
+            "industry_percentile": ticker_return_row["percentile"],
+            "industry_size": industry_data["industry_size"],
+        })
+
+    if not percentile_rows:
+        print("No percentile results generated.")
+        return pd.DataFrame()
+
+    result_df = pd.DataFrame(percentile_rows).sort_values("industry_percentile", ascending=False)
+    print(f"\nPortfolio industry return percentiles as of {target_date.strftime('%Y-%m-%d')}")
+    print(f"Ticker universe as of {db_as_of.date()}: {len(universe):,} symbols from {h5_path}")
+    print(tabulate(
+        result_df.assign(
+            daily_return=lambda df: df["daily_return"].map(lambda x: f"{x * 100:.2f}%"),
+            industry_percentile=lambda df: df["industry_percentile"].map(lambda x: f"{x:.1f}%"),
+        )[["ticker", "market", "yf_industry", "daily_return", "industry_percentile", "industry_size"]],
+        headers="keys",
+        tablefmt="fancy_grid",
+        showindex=False,
+    ))
+
+    plot_df = result_df.sort_values("industry_percentile")
+    colors = ["#2ca02c" if x >= 0 else "#d62728" for x in plot_df["daily_return"]]
+    labels = plot_df["ticker"] + " | " + plot_df["yf_industry"]
+
+    plt.figure(figsize=(12, max(6, len(plot_df) * 0.45)))
+    plt.barh(labels, plot_df["industry_percentile"], color=colors)
+    plt.xlim(0, 100)
+    plt.xlabel("Industry Daily Return Percentile")
+    plt.title(f"Portfolio Ticker Percentile vs Industry ({target_date.strftime('%Y-%m-%d')})")
+    plt.grid(axis="x", alpha=0.3)
+    for i, value in enumerate(plot_df["industry_percentile"]):
+        plt.text(min(value + 1, 98), i, f"{value:.1f}%", va="center")
+    plt.tight_layout()
+    plt.show()
+
+    return result_df
 
 def stock_value_factor(ticker_h5=None, as_of_date=None, fiscal_year=2025, fiscal_period="q4", limit=None):
     ticker_db = OUTPUT_DIR / "tickers_NYSE+NASDAQ_20260519_165904.h5"

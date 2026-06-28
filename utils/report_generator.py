@@ -123,6 +123,9 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
     sp500_ret = daily_pnl_data[0].get('S&P 500 daily return') if daily_pnl_data else None
     if sp500_ret is not None:
         print(f"{'当日S&P500贡献度:':<10} {sp500_ret * 10000:.2f}bps")
+    nasdaq_ret = daily_pnl_data[0].get('NASDAQ daily return') if daily_pnl_data else None
+    if nasdaq_ret is not None:
+        print(f"{'当日NASDAQ贡献度:':<10} {nasdaq_ret * 10000:.2f}bps")
     print(f"{'当日总盈亏:':<10} {total_daily_pnl:.2f}GBP")
     print(f"{'当日外汇盈亏:':<8} {sum(data['fx_pnl'] for data in daily_pnl_data):.2f}GBP")
     print(f"{'当日非外汇盈亏:':<6} {sum(data['non_fx_pnl'] for data in daily_pnl_data):.2f}GBP")
