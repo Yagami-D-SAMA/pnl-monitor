@@ -42,6 +42,6 @@ if __name__ == "__main__":
     # 3. 查看历史PnL
     # load_historical_pnl('2026-06-29', data_source='ALL')
     # 4. 计算累计贡献度
-    # calculate_cumulative_contribution('2025-12-31', '2026-06-26', data_source='ALL')
+    # calculate_cumulative_contribution('2025-12-31', '2026-07-03', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2026-03-09', '2026-03-13')
