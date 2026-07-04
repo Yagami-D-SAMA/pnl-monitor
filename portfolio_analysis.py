@@ -29,11 +29,11 @@ if __name__ == "__main__":
     # todo build a database for historical price movement
     # todo build value factor construction
     # todo ETF price comparison
-    # todo display top 10 constituents perf of main stream indices every day
     # todo China US EU PMI/CPI/Macro data analysis
     # todo improve UI user to zoom in trade for detail
     # todo N/A, need to re calculate price
-    analyze_portfolio(data_source='ALL', asset_type=True)
+    # todo next dividend date
+    analyze_portfolio('2026-07-03',data_source='ALL', asset_type=True)
     # stock_monitor(90)
     # run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL')
     # export_industry_price_returns()
