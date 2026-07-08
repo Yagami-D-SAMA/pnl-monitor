@@ -3,7 +3,7 @@ import yfinance as yf
 from datetime import datetime
 import os
 import pickle
-from utils.Calculator import is_weekend, resolve_latest_prev_day
+from utils.Calculator import get_previous_trading_day, is_weekend, resolve_latest_prev_day
 
 class DataLoader:
     def __init__(self, investment_dir, trade_history_paths, enum_path, dvd_history_path, target_date=None):
@@ -150,7 +150,10 @@ class DataLoader:
                 hist_data = inst.history(start=(target_date - pd.Timedelta(days=20)), end=target_date)
 
                 if len(hist_data.index) >= 2:
-                    latest_date, prev_day, ok = resolve_latest_prev_day(hist_data, target_date, prev_date, ticker)
+                    ticker_prev_date = get_previous_trading_day(target_date, ticker)
+                    latest_date, prev_day, ok = resolve_latest_prev_day(
+                        hist_data, target_date, ticker_prev_date, ticker
+                    )
                     if latest_date is None:
                         rtn_dict[ticker] = None
                         continue

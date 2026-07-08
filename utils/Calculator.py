@@ -2,6 +2,7 @@ import pandas as pd
 import os
 from datetime import datetime
 import yfinance as yf
+import exchange_calendars as xcals
 from typing import Dict, List, Tuple, Any
 from collections import defaultdict
 import json
@@ -103,6 +104,44 @@ def is_weekend(date_obj: datetime.date) -> bool:
     Return True if date_obj is Saturday or Sunday, else False.
     """
     return date_obj.weekday() >= 5
+
+YAHOO_SUFFIX_EXCHANGE_CALENDAR = {
+    ".L": "XLON",
+}
+
+YAHOO_TICKER_EXCHANGE_CALENDAR = {
+    "^GSPC": "XNYS",
+    "ES=F": "XNYS",
+}
+
+
+def get_exchange_calendar_name(ticker: str) -> str:
+    """Map a Yahoo Finance ticker to its exchange calendar."""
+    ticker_upper = ticker.upper()
+    if ticker_upper in YAHOO_TICKER_EXCHANGE_CALENDAR:
+        return YAHOO_TICKER_EXCHANGE_CALENDAR[ticker_upper]
+    for suffix, calendar_name in YAHOO_SUFFIX_EXCHANGE_CALENDAR.items():
+        if ticker_upper.endswith(suffix):
+            return calendar_name
+    return "XNYS"
+
+
+def get_previous_trading_day(target_date: datetime, ticker: str) -> datetime:
+    """Return the ticker exchange's previous trading session."""
+    calendar_name = get_exchange_calendar_name(ticker)
+    calendar = xcals.get_calendar(calendar_name)
+    target_session = pd.Timestamp(target_date.date())
+
+    if calendar.is_session(target_session):
+        previous_session = calendar.previous_session(target_session)
+    else:
+        previous_session = calendar.date_to_session(target_session, direction="previous")
+
+    return target_date.replace(
+        year=previous_session.year,
+        month=previous_session.month,
+        day=previous_session.day,
+    )
 
 def resolve_latest_prev_day(hist_data: pd.DataFrame, target_date: datetime, prev_date: datetime, ticker: str):
     """
@@ -267,7 +306,10 @@ class Calculator:
                     hist_data = stock.history(start=(target_date - pd.Timedelta(days=5)), end=target_date)
 
                     if len(hist_data.index) >= 2:
-                        latest_date, prev_day, ok = resolve_latest_prev_day(hist_data, target_date, prev_date, ticker)
+                        ticker_prev_date = get_previous_trading_day(target_date, ticker)
+                        latest_date, prev_day, ok = resolve_latest_prev_day(
+                            hist_data, target_date, ticker_prev_date, ticker
+                        )
                         if latest_date is None:
                             print(f"{ticker}没有{latest_date}价格数据")
                             continue
@@ -298,7 +340,7 @@ class Calculator:
 
                         # 价格调整
                         # todo find a better way to treat below ticker price adj
-                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L', 'STHS.L', 'COPG.L'}:
+                        if position['ccy'] == 'GBP' and ticker not in {'INXG.L', 'IDTG.L', 'GOVP.L', 'ERNS.L', 'IJPH.L', 'GSPX.L', 'GIGB.L', 'DFND.L', 'STHS.L', 'COPG.L', 'SMGB.L'}:
                             current_price /= 100
                             prev_price /= 100
                             price_change /= 100
@@ -338,7 +380,9 @@ class Calculator:
                         total_cost += position['cost']
                         cumulative_dividend = current_positions[market]['dvd_pl_total']
                         spx_rtn = market_comp_rtn["^GSPC"]
-                        bench_rtn = market_comp_rtn["ES=F"] if spx_rtn == 0 else spx_rtn
+                        nasdaq_rtn = market_comp_rtn.get("^NDX")
+                        # bench_rtn = market_comp_rtn["ES=F"] if spx_rtn == 0 else spx_rtn
+                        bench_rtn = spx_rtn
                         daily_pnl_data.append({
                             'market': market,
                             'price_change': price_change,
@@ -361,7 +405,8 @@ class Calculator:
                             'region': position['regions'],
                             "Strategy": (market if pd.isna(position.get("strategy")) else position.get("strategy")),
                             'cumulative dividend': cumulative_dividend,
-                            'S&P 500 daily return': bench_rtn
+                            'S&P 500 daily return': bench_rtn,
+                            'NASDAQ daily return': nasdaq_rtn
                         })
                     else:
                         print(f"获取{ticker}数据时不足2天")
