@@ -37,6 +37,23 @@ def get_previous_business_day(target_date: datetime) -> datetime:
         prev_date -= timedelta(days=1)
     return prev_date
 
+def _load_local_env_if_needed() -> None:
+    """Load root .env values into os.environ without overriding existing environment variables."""
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
 def _read_slickcharts_weight_table(url: str) -> pd.DataFrame:
     from io import BytesIO
     from urllib.request import Request, urlopen
@@ -400,6 +417,323 @@ def portfolio_drawdown_monitor(running_date: object = None, lookback_period: int
         plt.legend()
         plt.tight_layout()
         plt.show()
+
+    return result_df
+
+class DividendProvider:
+    """Minimal dividend provider interface for upcoming dividend display."""
+
+    data_source = "unknown"
+
+    def fetch_next_dividend(self, ticker: str, as_of_date: datetime | None = None) -> dict | None:
+        raise NotImplementedError
+
+
+def _first_non_empty(value):
+    if isinstance(value, (list, tuple)) and value:
+        return value[0]
+    if isinstance(value, pd.Series):
+        non_empty = value.dropna()
+        return non_empty.iloc[0] if not non_empty.empty else None
+    return value
+
+
+def _normalize_optional_date(value):
+    value = _first_non_empty(value)
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        parsed = pd.to_datetime(value, errors="coerce")
+    except Exception:
+        return None
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
+
+
+def _calendar_lookup(calendar, candidates: list[str]):
+    if calendar is None:
+        return None
+
+    candidate_map = {candidate.lower(): candidate for candidate in candidates}
+
+    if isinstance(calendar, dict):
+        for key, value in calendar.items():
+            if str(key).strip().lower() in candidate_map:
+                return value
+        return None
+
+    if isinstance(calendar, pd.DataFrame):
+        for index_value in calendar.index:
+            if str(index_value).strip().lower() in candidate_map:
+                row = calendar.loc[index_value]
+                return _first_non_empty(row)
+        for column in calendar.columns:
+            if str(column).strip().lower() in candidate_map:
+                return _first_non_empty(calendar[column])
+
+    if isinstance(calendar, pd.Series):
+        for index_value, value in calendar.items():
+            if str(index_value).strip().lower() in candidate_map:
+                return value
+
+    return None
+
+
+def _normalize_optional_number(value):
+    value = _first_non_empty(value)
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    parsed = pd.to_numeric(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return float(parsed)
+
+
+def _latest_dividend_amount(stock, ex_dividend_date=None):
+    try:
+        dividends = stock.dividends
+    except Exception:
+        return None
+
+    if dividends is None or dividends.empty:
+        return None
+
+    dividends = dividends.dropna()
+    if dividends.empty:
+        return None
+
+    if ex_dividend_date is not None:
+        dividend_dates = pd.to_datetime(dividends.index).tz_localize(None).date
+        matched = dividends[dividend_dates == ex_dividend_date]
+        if not matched.empty:
+            return float(matched.iloc[-1])
+
+    return float(dividends.iloc[-1])
+
+
+def _first_present(row: dict, keys: list[str]):
+    for key in keys:
+        if key in row and row[key] not in (None, ""):
+            return row[key]
+    return None
+
+
+def _current_and_next_month_window(running_date: datetime) -> tuple[pd.Timestamp, pd.Timestamp]:
+    month_start = pd.Timestamp(running_date.date()).replace(day=1)
+    month_after_next_start = month_start + pd.DateOffset(months=2)
+    return month_start, month_after_next_start
+
+
+class YFinanceDividendProvider(DividendProvider):
+    """Simple yfinance-backed provider for the next dividend calendar event."""
+
+    data_source = "yfinance"
+
+    def fetch_next_dividend(self, ticker: str, as_of_date: datetime | None = None) -> dict | None:
+        stock = yf.Ticker(ticker)
+        calendar = stock.calendar
+        if callable(calendar):
+            calendar = calendar()
+        try:
+            info = stock.info or {}
+        except Exception:
+            info = {}
+
+        payment_date = _normalize_optional_date(_calendar_lookup(calendar, ["Dividend Date", "Payment Date", "Pay Date"]))
+        ex_dividend_date = _normalize_optional_date(_calendar_lookup(calendar, ["Ex-Dividend Date", "Ex Dividend Date"]))
+        record_date = _normalize_optional_date(_calendar_lookup(calendar, ["Record Date"]))
+        dividend_amount = _normalize_optional_number(
+            _calendar_lookup(calendar, ["Dividend Amount", "Dividend Rate", "Dividend"])
+        )
+
+        if payment_date is None:
+            return None
+
+        if dividend_amount is None:
+            dividend_amount = _latest_dividend_amount(stock, ex_dividend_date=ex_dividend_date)
+
+        return {
+            "ex_dividend_date": ex_dividend_date,
+            "record_date": record_date,
+            "payment_date": payment_date,
+            "dividend_amount": dividend_amount,
+            "currency": info.get("currency"),
+            "data_source": self.data_source,
+        }
+
+
+class FMPDividendProvider(DividendProvider):
+    """Financial Modeling Prep dividend provider."""
+
+    data_source = "financial_modeling_prep"
+
+    def __init__(self, api_key: str | None = None):
+        _load_local_env_if_needed()
+        self.api_key = api_key or os.getenv("FMP_API_KEY")
+
+    def _fetch_json(self, ticker: str):
+        import json
+        from urllib.parse import urlencode
+        from urllib.request import urlopen
+
+        if not self.api_key:
+            raise ValueError("FMP_API_KEY is not set")
+
+        params = urlencode({"symbol": ticker, "apikey": self.api_key})
+        url = f"https://financialmodelingprep.com/stable/dividends?{params}"
+        with urlopen(url, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def fetch_next_dividend(self, ticker: str, as_of_date: datetime | None = None) -> dict | None:
+        payload = self._fetch_json(ticker)
+        if isinstance(payload, dict):
+            payload = payload.get("historical") or payload.get("data") or payload.get("results") or []
+        if not isinstance(payload, list) or not payload:
+            return None
+
+        as_of_timestamp = pd.Timestamp((as_of_date or datetime.today()).date())
+        normalized_rows = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+
+            payment_date = _normalize_optional_date(_first_present(row, ["paymentDate", "payment_date", "payDate"]))
+            if payment_date is None:
+                continue
+
+            payment_timestamp = pd.Timestamp(payment_date)
+            if payment_timestamp < as_of_timestamp:
+                continue
+
+            dividend_amount = _normalize_optional_number(_first_present(
+                row,
+                ["dividend", "adjDividend", "adjustedDividend", "dividendAmount", "amount"],
+            ))
+
+            normalized_rows.append({
+                "ex_dividend_date": _normalize_optional_date(_first_present(row, ["date", "exDividendDate", "ex_dividend_date"])),
+                "record_date": _normalize_optional_date(_first_present(row, ["recordDate", "record_date"])),
+                "payment_date": payment_date,
+                "dividend_amount": dividend_amount,
+                "currency": _first_present(row, ["currency", "reportedCurrency"]),
+                "data_source": self.data_source,
+            })
+
+        if not normalized_rows:
+            return None
+
+        normalized_rows.sort(key=lambda item: item["payment_date"])
+        return normalized_rows[0]
+
+
+def _build_dividend_display_row(
+    *,
+    ticker: str,
+    position_name: str,
+    quantity,
+    dividend_data: dict,
+) -> dict:
+    dividend_amount = dividend_data.get("dividend_amount")
+    estimated_cash_dividend = None
+    if quantity is not None and dividend_amount is not None:
+        estimated_cash_dividend = float(quantity) * float(dividend_amount)
+
+    return {
+        "ticker": ticker,
+        "position_name": position_name,
+        "quantity": quantity,
+        "ex_dividend_date": dividend_data.get("ex_dividend_date"),
+        "payment_date": dividend_data.get("payment_date"),
+        "dividend_amount": dividend_amount,
+        "currency": dividend_data.get("currency"),
+        "estimated_cash_dividend": estimated_cash_dividend,
+        "data_source": dividend_data.get("data_source"),
+    }
+
+
+def display_upcoming_dividends(
+    running_date: object = None,
+    data_source: object = "ALL",
+    provider: DividendProvider | None = None,
+) -> pd.DataFrame:
+    """Display current portfolio dividends payable in the current or next calendar month."""
+    portfolio_context = _load_portfolio_context(running_date, data_source)
+    if portfolio_context is None:
+        return pd.DataFrame()
+
+    running_date = portfolio_context["target_date"]
+    current_positions = portfolio_context["current_positions"]
+    market_ticker_map = portfolio_context["market_ticker_map"]
+    window_start, window_end = _current_and_next_month_window(running_date)
+    provider = provider or FMPDividendProvider()
+
+    rows = []
+    for position_name, position_data in current_positions.items():
+        ticker = market_ticker_map.get(position_name)
+        if not ticker:
+            print(f"{position_name}: enum.csv 中没有 ticker mapping，跳过")
+            continue
+
+        try:
+            dividend_data = provider.fetch_next_dividend(ticker, as_of_date=running_date)
+        except Exception as e:
+            print(f"警告: {ticker} dividend API 获取失败: {e}")
+            continue
+
+        if not dividend_data:
+            continue
+
+        payment_date = dividend_data.get("payment_date")
+        if payment_date is None:
+            continue
+
+        payment_timestamp = pd.Timestamp(payment_date)
+        if not (window_start <= payment_timestamp < window_end):
+            continue
+
+        rows.append(_build_dividend_display_row(
+            ticker=ticker,
+            position_name=position_name,
+            quantity=position_data.get("position"),
+            dividend_data=dividend_data,
+        ))
+
+    result_df = pd.DataFrame(rows)
+    print(
+        f"\nUpcoming dividends with payment date from "
+        f"{window_start.strftime('%Y-%m-%d')} to {(window_end - pd.Timedelta(days=1)).strftime('%Y-%m-%d')}"
+    )
+    print("-" * 140)
+    if result_df.empty:
+        print("No current portfolio dividends found for current month or next month.")
+        return result_df
+
+    display_df = result_df.copy()
+    for col in ["ex_dividend_date", "payment_date"]:
+        display_df[col] = display_df[col].map(lambda x: "" if pd.isna(x) else str(x))
+    for col in ["dividend_amount", "estimated_cash_dividend"]:
+        display_df[col] = display_df[col].map(lambda x: "" if pd.isna(x) else f"{x:,.4f}")
+
+    print(tabulate(
+        display_df[
+            [
+                "ticker",
+                "position_name",
+                "quantity",
+                "ex_dividend_date",
+                "payment_date",
+                "dividend_amount",
+                "currency",
+                "estimated_cash_dividend",
+                "data_source",
+            ]
+        ],
+        headers="keys",
+        tablefmt="fancy_grid",
+        showindex=False,
+        disable_numparse=True,
+    ))
 
     return result_df
 
