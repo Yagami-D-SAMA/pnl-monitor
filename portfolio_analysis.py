@@ -12,7 +12,8 @@ from utils.analyzer import (
     stock_value_factor,
     export_industry_price_returns,
     analyze_portfolio_industry_percentiles,
-    portfolio_drawdown_monitor
+    portfolio_drawdown_monitor,
+    display_upcoming_dividends
 )
 
 def run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL'):
@@ -21,6 +22,52 @@ def run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_s
         lookback_period=lookback_period,
         data_source=data_source,
     )
+
+def run_dividend_display(running_date=None, data_source='ALL'):
+    return display_upcoming_dividends(
+        running_date=running_date,
+        data_source=data_source,
+    )
+
+def _ask_to_run(next_step_name: str) -> bool:
+    answer = input(f"\n是否开始运行 {next_step_name}? (y/N，回车跳过并继续询问下一个任务): ").strip().lower()
+    return answer in {"y", "yes", "是"}
+
+def run_portfolio_daily_workflow(
+    running_date=None,
+    data_source='ALL',
+    asset_type=True,
+    lookback_period=90,
+    cumulative_start_date='2025-12-31',
+    cumulative_end_date='2026-07-09',
+):
+    analyze_portfolio(target_date=running_date, data_source=data_source, asset_type=asset_type)
+
+    if _ask_to_run("run_portfolio_drawdown_monitor"):
+        run_portfolio_drawdown_monitor(
+            running_date=running_date,
+            lookback_period=lookback_period,
+            data_source=data_source,
+        )
+
+    if _ask_to_run("run_dividend_display"):
+        run_dividend_display(
+            running_date=running_date,
+            data_source=data_source,
+        )
+
+    if _ask_to_run("analyze_portfolio_industry_percentiles"):
+        analyze_portfolio_industry_percentiles(
+            target_date=running_date,
+            data_source=data_source,
+        )
+
+    if _ask_to_run("calculate_cumulative_contribution"):
+        calculate_cumulative_contribution(
+            cumulative_start_date,
+            cumulative_end_date,
+            data_source=data_source,
+        )
 
 if __name__ == "__main__":
     # 用法示例：
@@ -32,16 +79,16 @@ if __name__ == "__main__":
     # todo China US EU PMI/CPI/Macro data analysis
     # todo improve UI user to zoom in trade for detail
     # todo N/A, need to re calculate price
-    # todo next dividend date
-    analyze_portfolio('2026-07-03',data_source='ALL', asset_type=True)
+    run_portfolio_daily_workflow(running_date=None, data_source='ALL', asset_type=True)
     # stock_monitor(90)
     # run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL')
+    # run_dividend_display(running_date=None, data_source='ALL')
     # export_industry_price_returns()
     # analyze_portfolio_industry_percentiles()
     # stock_value_factor()
     # 3. 查看历史PnL
     # load_historical_pnl('2026-06-29', data_source='ALL')
     # 4. 计算累计贡献度
-    # calculate_cumulative_contribution('2025-12-31', '2026-07-03', data_source='ALL')
+    # calculate_cumulative_contribution('2025-12-31', '2026-07-09', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2026-03-09', '2026-03-13')
