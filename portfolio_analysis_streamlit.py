@@ -4,7 +4,7 @@ import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import streamlit as st
@@ -12,6 +12,28 @@ import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 TARGET_SCRIPT = PROJECT_ROOT / "portfolio_analysis.py"
+TRADE_DISPLAY_COLUMNS = [
+    "TextDate",
+    "Time",
+    "Activity",
+    "Market",
+    "Direction",
+    "Quantity",
+    "Price",
+    "Currency",
+    "Consideration",
+    "Commission",
+    "Charges",
+    "Cost/Proceeds",
+    "Conversion rate",
+    "Order type",
+    "Venue ID",
+    "Settlement date",
+    "Order ID",
+    "AssetType",
+    "Region",
+    "Strategy",
+]
 
 
 def run_portfolio_analysis() -> tuple[int, str]:
@@ -85,6 +107,92 @@ def save_pending_daily_pnl(pending_result: object, overwrite_existing: bool) -> 
         return 1, buffer.getvalue()
 
 
+def build_position_options(pending_result: object) -> list[str]:
+    daily_pnl_result = pending_result.get("daily_pnl_result") or {}
+    market_details = daily_pnl_result.get("market_details") or []
+    return [row["market"] for row in market_details if row.get("market")]
+
+
+def get_position_trade_history(pending_result: object, market: str):
+    trades_df = pending_result.get("trades_df")
+    if trades_df is None or trades_df.empty:
+        return None
+
+    position_trades = trades_df[trades_df["Market"] == market].copy()
+    if position_trades.empty:
+        return position_trades
+
+    position_trades = position_trades.sort_values(["TextDate", "Time"], ascending=[False, False])
+    display_columns = [column for column in TRADE_DISPLAY_COLUMNS if column in position_trades.columns]
+    position_trades = position_trades[display_columns]
+    if "TextDate" in position_trades.columns:
+        position_trades["TextDate"] = position_trades["TextDate"].dt.strftime("%Y-%m-%d")
+    return position_trades
+
+
+def run_followup_step(
+    step_name: str,
+    target_date: object,
+    data_source: str,
+    lookback_period: int,
+    cumulative_start_date: object,
+    cumulative_end_date: object,
+) -> tuple[int, str, list[bytes]]:
+    buffer = StringIO()
+    images: list[bytes] = []
+    try:
+        import matplotlib.pyplot as plt
+
+        from utils.analyzer import (
+            analyze_portfolio_industry_percentiles,
+            calculate_cumulative_contribution,
+            display_index_top_constituents_performance,
+            display_upcoming_dividends,
+            portfolio_drawdown_monitor,
+        )
+
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        with redirect_stdout(buffer), redirect_stderr(buffer):
+            if step_name == "prompt_for_constituents":
+                display_index_top_constituents_performance(top_n=10)
+            elif step_name == "run_portfolio_drawdown_monitor":
+                portfolio_drawdown_monitor(
+                    running_date=target_date_str,
+                    lookback_period=lookback_period,
+                    data_source=data_source,
+                )
+            elif step_name == "run_dividend_display":
+                display_upcoming_dividends(
+                    running_date=target_date_str,
+                    data_source=data_source,
+                )
+            elif step_name == "analyze_portfolio_industry_percentiles":
+                analyze_portfolio_industry_percentiles(
+                    target_date=target_date_str,
+                    data_source=data_source,
+                )
+            elif step_name == "calculate_cumulative_contribution":
+                calculate_cumulative_contribution(
+                    cumulative_start_date.strftime("%Y-%m-%d"),
+                    cumulative_end_date.strftime("%Y-%m-%d"),
+                    data_source=data_source,
+                )
+            else:
+                raise ValueError(f"Unknown follow-up step: {step_name}")
+
+        for figure_number in plt.get_fignums():
+            figure = plt.figure(figure_number)
+            image_buffer = BytesIO()
+            figure.savefig(image_buffer, format="png", bbox_inches="tight")
+            image_buffer.seek(0)
+            images.append(image_buffer.getvalue())
+        plt.close("all")
+        return 0, buffer.getvalue(), images
+    except Exception as exc:
+        print(f"Streamlit follow-up error: {exc}", file=buffer)
+        return 1, buffer.getvalue(), images
+
+
 def parse_target_date(raw_value: str) -> date | None:
     raw_value = raw_value.strip()
     if not raw_value:
@@ -130,6 +238,16 @@ def main() -> None:
         st.session_state.pending_result = None
     if "pending_pnl_file" not in st.session_state:
         st.session_state.pending_pnl_file = None
+    if "latest_analysis_result" not in st.session_state:
+        st.session_state.latest_analysis_result = None
+    if "followup_output" not in st.session_state:
+        st.session_state.followup_output = ""
+    if "followup_images" not in st.session_state:
+        st.session_state.followup_images = []
+    if "last_run_target_date" not in st.session_state:
+        st.session_state.last_run_target_date = None
+    if "last_run_data_source" not in st.session_state:
+        st.session_state.last_run_data_source = None
 
     if run_clicked:
         with st.spinner("Generating portfolio report..."):
@@ -142,7 +260,12 @@ def main() -> None:
         st.session_state.last_code = code
         st.session_state.last_run_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state.pending_result = pending_result if code == 0 else None
+        st.session_state.latest_analysis_result = pending_result if code == 0 else None
         st.session_state.pending_pnl_file = get_expected_pnl_file(data_source, target_date) if code == 0 else None
+        st.session_state.followup_output = ""
+        st.session_state.followup_images = []
+        st.session_state.last_run_target_date = target_date if code == 0 else None
+        st.session_state.last_run_data_source = data_source if code == 0 else None
 
     st.markdown("### Report")
     if st.session_state.last_run_at:
@@ -155,7 +278,38 @@ def main() -> None:
         st.info("Click the button above to generate the report.")
 
     output = st.session_state.last_output or ""
-    st.code(output or "Report output will appear here after running.", language="text")
+    display_output = output + ("\n\n" + st.session_state.followup_output if st.session_state.followup_output else "")
+    st.code(display_output or "Report output will appear here after running.", language="text")
+    for image_index, image_bytes in enumerate(st.session_state.followup_images, start=1):
+        st.image(image_bytes, caption=f"Follow-up chart {image_index}", use_container_width=True)
+
+    if st.session_state.last_code == 0 and st.session_state.latest_analysis_result is not None:
+        st.markdown("### Position Zoom-In")
+        analysis_result = st.session_state.latest_analysis_result
+        position_options = build_position_options(analysis_result)
+        if position_options:
+            selected_market = st.selectbox(
+                "Position",
+                position_options,
+                format_func=lambda market: (
+                    f"{market} | {analysis_result['market_ticker_map'].get(market, 'No ticker')}"
+                ),
+            )
+            selected_position = analysis_result["current_positions"].get(selected_market, {})
+            ticker = analysis_result["market_ticker_map"].get(selected_market, "")
+            summary_cols = st.columns(4)
+            summary_cols[0].metric("Ticker", ticker or "N/A")
+            summary_cols[1].metric("Position", f"{selected_position.get('position', 0):,.0f}")
+            summary_cols[2].metric("Currency", selected_position.get("ccy", "N/A"))
+            summary_cols[3].metric("Strategy", selected_position.get("strategy", "N/A"))
+
+            trade_history = get_position_trade_history(analysis_result, selected_market)
+            if trade_history is None or trade_history.empty:
+                st.info("No trade history found for this position.")
+            else:
+                st.dataframe(trade_history, use_container_width=True, hide_index=True)
+        else:
+            st.info("No current positions are available for zoom-in.")
 
     if st.session_state.last_code == 0 and st.session_state.pending_result is not None:
         st.markdown("### Save Daily PnL")
@@ -183,9 +337,56 @@ def main() -> None:
                 st.error("Daily PnL file save failed.")
             st.rerun()
 
+    if st.session_state.last_code == 0:
+        workflow_target_date = st.session_state.last_run_target_date or target_date
+        workflow_data_source = st.session_state.last_run_data_source or data_source
+        st.markdown("### Follow-up Workflow")
+        st.caption("Run these in the same order as run_portfolio_daily_workflow after analyze_portfolio.")
+        st.write(f"Workflow date: `{workflow_target_date.strftime('%Y-%m-%d')}`, data source: `{workflow_data_source}`")
+        lookback_period = st.number_input("Drawdown lookback period", min_value=1, value=90, step=1)
+        date_cols = st.columns(2)
+        with date_cols[0]:
+            cumulative_start_date = st.date_input(
+                "Cumulative contribution start date",
+                value=date(2025, 12, 31),
+            )
+        with date_cols[1]:
+            cumulative_end_date = st.date_input(
+                "Cumulative contribution end date",
+                value=workflow_target_date,
+            )
+
+        followup_steps = [
+            ("prompt_for_constituents", "Display index top constituents"),
+            ("run_portfolio_drawdown_monitor", "Run portfolio drawdown monitor"),
+            ("run_dividend_display", "Run dividend display"),
+            ("analyze_portfolio_industry_percentiles", "Run industry percentiles"),
+            ("calculate_cumulative_contribution", "Run cumulative contribution"),
+        ]
+        for step_name, button_label in followup_steps:
+            if st.button(button_label, key=f"followup_{step_name}", use_container_width=True):
+                with st.spinner(f"Running {button_label}..."):
+                    code, step_output, step_images = run_followup_step(
+                        step_name=step_name,
+                        target_date=workflow_target_date,
+                        data_source=workflow_data_source,
+                        lookback_period=int(lookback_period),
+                        cumulative_start_date=cumulative_start_date,
+                        cumulative_end_date=cumulative_end_date,
+                    )
+                section_output = f"\n\n===== {button_label} =====\n{step_output}"
+                st.session_state.followup_output += section_output
+                st.session_state.followup_images.extend(step_images)
+                if code == 0:
+                    st.success(f"{button_label} completed.")
+                else:
+                    st.error(f"{button_label} failed.")
+                st.rerun()
+
+
     st.download_button(
         "Download report",
-        data=output.encode("utf-8"),
+        data=display_output.encode("utf-8"),
         file_name="portfolio_analysis_report.txt",
         mime="text/plain",
         use_container_width=True,

@@ -265,6 +265,9 @@ def analyze_portfolio(
             "data_loader": data_loader,
             "trade_history_paths": trade_history_paths,
             "target_date": target_date,
+            "trades_df": trades_df,
+            "current_positions": current_positions,
+            "market_ticker_map": market_ticker_map,
         }
 
     except Exception as e:
