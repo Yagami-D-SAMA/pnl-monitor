@@ -179,7 +179,14 @@ def _load_portfolio_context(target_date: object = None, data_source: object = No
         "closed_positions": closed_positions,
     }
 
-def analyze_portfolio(target_date: object = None, data_source: object = None, asset_type: bool = True, overwrite_existing=None) -> object:
+def analyze_portfolio(
+    target_date: object = None,
+    data_source: object = None,
+    asset_type: bool = True,
+    overwrite_existing=None,
+    prompt_for_constituents: bool = True,
+    save_results: bool = True,
+) -> object:
     """主函数：分析投资组合"""
     try:
         # 加载数据
@@ -240,16 +247,25 @@ def analyze_portfolio(target_date: object = None, data_source: object = None, as
         daily_pnl_result = generate_report(
             daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, target_date, region_pnl, region_market_value, strategy_pnl, strategy_market_value)
         # 保存结果
-        data_loader.save_results(daily_pnl_result, trade_history_paths, overwrite_existing=overwrite_existing)
-        try:
-            run_constituents = input(
-                "是否显示S&P500和NASDAQ当天weight排名Top 10 constituents的daily performance? (y/N): "
-            ).strip().lower()
-        except EOFError:
-            run_constituents = "n"
+        if save_results:
+            data_loader.save_results(daily_pnl_result, trade_history_paths, overwrite_existing=overwrite_existing)
+        if prompt_for_constituents:
+            try:
+                run_constituents = input(
+                    "是否显示S&P500和NASDAQ当天weight排名Top 10 constituents的daily performance? (y/N): "
+                ).strip().lower()
+            except EOFError:
+                run_constituents = "n"
 
-        if run_constituents in {"y", "yes", "是"}:
-            display_index_top_constituents_performance(top_n=10)
+            if run_constituents in {"y", "yes", "是"}:
+                display_index_top_constituents_performance(top_n=10)
+
+        return {
+            "daily_pnl_result": daily_pnl_result,
+            "data_loader": data_loader,
+            "trade_history_paths": trade_history_paths,
+            "target_date": target_date,
+        }
 
     except Exception as e:
         print(f"分析过程中发生错误: {e}")
