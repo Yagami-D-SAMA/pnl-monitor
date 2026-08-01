@@ -214,6 +214,7 @@ def analyze_portfolio(
                                                                         target_date, prev_date, GBPUSD_FX, GBPUSD_FX_prev, market_comp_rtn)
         # 计算已实现盈亏
         realized_pnl = calculator.calculate_realized_pnl(trades_df, trades_df['Market'].unique(), closed_positions)
+        asset_type_pct = None
         if asset_type:
             asset_type_pct = calculator.asset_type_calc(daily_pnl_data)
             table_data = [
@@ -268,6 +269,28 @@ def analyze_portfolio(
             "trades_df": trades_df,
             "current_positions": current_positions,
             "market_ticker_map": market_ticker_map,
+            "asset_type_pct": asset_type_pct,
+            "currency_summary": {
+                "total_market_value_usd": total_market_value_usd,
+                "usd_gbp_value": usd_gbp_value,
+                "usd_percentage": usd_percentage / 100,
+                "total_market_value_gbp": total_market_value_gbp,
+                "gbp_percentage": gbp_percentage / 100,
+                "total_market_value": total_market_value,
+                "gbpusd_fx": GBPUSD_FX,
+                "gbpusd_move_bps": gbp_usd_bps,
+            },
+            "portfolio_summary": {
+                "total_market_value": total_market_value,
+                "total_cost": total_cost,
+                "total_pnl": total_pnl,
+                "realized_pnl": realized_pnl,
+                "total_pnl_including_realized": total_pnl + realized_pnl,
+            },
+            "region_pnl": region_pnl,
+            "strategy_pnl": strategy_pnl,
+            "region_market_value": region_market_value,
+            "strategy_market_value": strategy_market_value,
         }
 
     except Exception as e:
