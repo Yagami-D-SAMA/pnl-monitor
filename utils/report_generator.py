@@ -1,3 +1,6 @@
+from .portfolio_aggregation import aggregate_holdings_by_strategy
+
+
 def _print_pnl_summary(title: str, pnl_by_group: dict, total_market_value: float) -> None:
     if not pnl_by_group or not total_market_value:
         return
@@ -44,6 +47,44 @@ def _print_market_value_summary(title: str, mv_by_group: dict, total_market_valu
 
     print("-" * (name_width + 24))
 
+
+def _print_strategy_holdings(
+    daily_pnl_data: list[dict],
+    total_market_value: float,
+    latest_date,
+) -> None:
+    strategy_holdings = aggregate_holdings_by_strategy(
+        daily_pnl_data,
+        total_market_value,
+    )
+    if not strategy_holdings:
+        return
+
+    print(f"\n策略持仓情况 ({latest_date.strftime('%Y-%m-%d')}):")
+    print("-" * 320)
+    print(
+        f"{'策略':<50} {'当前持仓':>10} {'当前价格(LC)':>8} "
+        f"{'平均买入价格(LC)':>12} {'成本(GBP)':>10} {'累计独立损益(%)':>15} "
+        f"{'累计盈亏(GBP)':>15} {'累计外汇损益(%)':>15} "
+        f"{'累计外汇损益(GBP)':>15} {'当前市值(GBP)':>15} "
+        f"{'市值占比(%)':>10} {'持有天数':>7} {'累计分红':>7}"
+    )
+    print("-" * 320)
+
+    for data in strategy_holdings:
+        cumulative_dividend_text = f"{data['cumulative dividend']:>9,.2f}GBP"
+        print(
+            f"{data['Strategy']:<50} {data['position']:>12.0f} {'N/A':>10} "
+            f"{'N/A':>15} {data['cost']:>15,.2f}GBP "
+            f"{data['standalone_bps'] * 100:>12,.2f}% "
+            f"{data['pnl']:>15,.2f}GBP {data['cumulative_fx_return']:>15,.2f}% "
+            f"{data['cumulative_fx_pnl']:>18,.2f}GBP "
+            f"{data['market_value']:>15,.2f}GBP "
+            f"{data['market_value_pct'] * 100:>10,.2f}% "
+            f"{data['initial_holding_days']:>9.0f} days {cumulative_dividend_text}"
+        )
+    print("-" * 320)
+
 def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, realized_pnl, latest_date, region_pnl=None, region_market_value=None,
                     strategy_pnl=None, strategy_market_value=None):
     """生成报告"""
@@ -72,6 +113,7 @@ def generate_report(daily_pnl_data, total_market_value, total_pnl, total_cost, r
               f"{data['market_value']:>15,.2f}GBP {market_value_contribution:>10,.2f}% {data['initial_holding_days']:>9} days {cumulative_dividend_text}")
     
     print("-" * 320)
+    _print_strategy_holdings(daily_pnl_data, total_market_value, latest_date)
     print(f"总市值: {total_market_value:>15,.2f}")
     print(f"总成本: {total_cost:>15,.2f}")
     print(f"总盈亏(包括分红): {total_pnl:>10,.2f}")

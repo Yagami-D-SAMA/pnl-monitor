@@ -9,6 +9,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from .portfolio_aggregation import aggregate_holdings_by_strategy
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRADE_DISPLAY_COLUMNS = [
@@ -295,7 +297,14 @@ def format_trade_marker_label(trade: pd.Series) -> str:
         quantity_label = f"{quantity:,.0f}"
     except (TypeError, ValueError):
         quantity_label = str(trade.get("Quantity", ""))
-    return f"{direction_label}\n{quantity_label}".strip()
+
+    try:
+        price = float(trade.get("AdjustedPrice", trade.get("Price", 0)))
+        price_label = f"{price:,.2f}"
+    except (TypeError, ValueError):
+        price_label = str(trade.get("AdjustedPrice", trade.get("Price", "")))
+
+    return f"{direction_label}\nSize {quantity_label}\nPrice {price_label}".strip()
 
 
 def get_trade_label_color(direction: str) -> str:
@@ -430,6 +439,167 @@ def display_position_price_history_charts(
                 st.pyplot(figure, use_container_width=True)
 
 
+def build_cumulative_return_chart_data(figure: object) -> dict[str, object] | None:
+    """Extract cumulative-return series from the analyzer's Matplotlib figure."""
+    axes = getattr(figure, "axes", [])
+    if not axes:
+        return None
+
+    records: list[dict[str, object]] = []
+    for line in axes[0].get_lines():
+        series_name = str(line.get_label())
+        if not series_name or series_name.startswith("_"):
+            continue
+
+        dates = pd.to_datetime(line.get_xdata(), errors="coerce")
+        values = pd.to_numeric(pd.Series(line.get_ydata()), errors="coerce")
+        for chart_date, value in zip(dates, values, strict=False):
+            if pd.isna(chart_date) or pd.isna(value):
+                continue
+            records.append(
+                {
+                    "date": pd.Timestamp(chart_date).isoformat(),
+                    "series": series_name,
+                    "cumulative_return": float(value),
+                }
+            )
+
+    if not records:
+        return None
+
+    return {
+        "title": axes[0].get_title() or "Cumulative Return",
+        "records": records,
+    }
+
+
+def display_cumulative_return_chart(chart_data: dict[str, object]) -> None:
+    """Display cumulative returns with a shared tooltip and vertical crosshair."""
+    import altair as alt
+
+    records = chart_data.get("records", [])
+    if not records:
+        return
+
+    long_data = pd.DataFrame(records)
+    long_data["date"] = pd.to_datetime(long_data["date"], errors="coerce")
+    long_data["cumulative_return"] = pd.to_numeric(
+        long_data["cumulative_return"],
+        errors="coerce",
+    )
+    long_data = long_data.dropna(subset=["date", "series", "cumulative_return"])
+    if long_data.empty:
+        return
+
+    series_order = [
+        name
+        for name in ["Portfolio", "S&P 500", "NASDAQ"]
+        if name in long_data["series"].unique()
+    ]
+    series_order.extend(
+        name for name in long_data["series"].unique() if name not in series_order
+    )
+
+    wide_data = (
+        long_data.pivot_table(
+            index="date",
+            columns="series",
+            values="cumulative_return",
+            aggfunc="last",
+        )
+        .reindex(columns=series_order)
+        .sort_index()
+        .ffill()
+        .reset_index()
+    )
+
+    date_values = wide_data["date"].tolist()
+    if len(date_values) == 1:
+        hover_starts = [date_values[0] - pd.Timedelta(hours=12)]
+        hover_ends = [date_values[0] + pd.Timedelta(hours=12)]
+    else:
+        date_midpoints = [
+            left_date + (right_date - left_date) / 2
+            for left_date, right_date in zip(
+                date_values[:-1],
+                date_values[1:],
+                strict=True,
+            )
+        ]
+        hover_starts = [
+            date_values[0] - (date_midpoints[0] - date_values[0]),
+            *date_midpoints,
+        ]
+        hover_ends = [
+            *date_midpoints,
+            date_values[-1] + (date_values[-1] - date_midpoints[-1]),
+        ]
+
+    hover_data = wide_data.copy()
+    hover_data["hover_start"] = hover_starts
+    hover_data["hover_end"] = hover_ends
+
+    selected_date = alt.selection_point(
+        fields=["date"],
+        on="pointerover",
+        empty=False,
+    )
+    base = alt.Chart(wide_data).encode(x=alt.X("date:T", title="Date"))
+    lines = (
+        base.transform_fold(series_order, as_=["series", "cumulative_return"])
+        .mark_line(strokeWidth=2)
+        .encode(
+            y=alt.Y(
+                "cumulative_return:Q",
+                title="Cumulative Return (Base = 1)",
+                scale=alt.Scale(zero=False),
+            ),
+            color=alt.Color(
+                "series:N",
+                title=None,
+                sort=series_order,
+                scale=alt.Scale(
+                    domain=series_order,
+                    range=["#1f77b4", "#d62728", "#2ca02c"][: len(series_order)],
+                ),
+            ),
+        )
+    )
+    points = lines.mark_point(size=65).encode(
+        opacity=alt.condition(selected_date, alt.value(1), alt.value(0))
+    )
+    tooltip_fields = [alt.Tooltip("date:T", title="Date", format="%Y-%m-%d")]
+    tooltip_fields.extend(
+        alt.Tooltip(f"{series}:Q", title=series, format=".4f")
+        for series in series_order
+    )
+    crosshair = (
+        base.transform_filter(selected_date)
+        .mark_rule(color="#808080", strokeWidth=1)
+    )
+    selectors = (
+        alt.Chart(hover_data)
+        .mark_rect(opacity=0)
+        .encode(
+            x=alt.X("hover_start:T", title="Date"),
+            x2="hover_end:T",
+            tooltip=tooltip_fields,
+        )
+        .add_params(selected_date)
+    )
+
+    chart = (
+        alt.layer(lines, points, crosshair, selectors)
+        .properties(
+            title=str(chart_data.get("title", "Cumulative Return")),
+            height=500,
+        )
+        .configure_axis(grid=True, gridOpacity=0.2)
+        .configure_view(strokeWidth=0)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
 def extract_market_value_messages(output: str) -> list[str]:
     """Pull calculation warnings from captured calculate_market_values output."""
     if not output:
@@ -533,8 +703,35 @@ def build_holdings_table(analysis_result: object) -> pd.DataFrame:
     return holdings_df
 
 
+def build_strategy_holdings_table(analysis_result: object) -> pd.DataFrame:
+    daily_pnl_result = analysis_result.get("daily_pnl_result") or {}
+    market_details = daily_pnl_result.get("market_details") or []
+    total_market_value = daily_pnl_result.get("total_market_value") or 0
+    strategy_details = aggregate_holdings_by_strategy(market_details, total_market_value)
+
+    return pd.DataFrame([
+        {
+            "Market": detail.get("Strategy"),
+            "Position": detail.get("position"),
+            "Current Price": detail.get("current_price"),
+            "Average Buy Price": detail.get("trade_price"),
+            "Cost GBP": detail.get("cost"),
+            "Cumulative Return %": detail.get("standalone_bps"),
+            "Cumulative PnL GBP": detail.get("pnl"),
+            "Cumulative FX Return %": (detail.get("cumulative_fx_return") or 0) / 100,
+            "Cumulative FX PnL GBP": detail.get("cumulative_fx_pnl"),
+            "Market Value GBP": detail.get("market_value"),
+            "Market Value %": detail.get("market_value_pct"),
+            "Holding Days": detail.get("initial_holding_days"),
+            "Cumulative Dividend GBP": detail.get("cumulative dividend"),
+        }
+        for detail in strategy_details
+    ])
+
+
 def display_holdings_tables(analysis_result: object) -> None:
     holdings_df = build_holdings_table(analysis_result)
+    strategy_holdings_df = build_strategy_holdings_table(analysis_result)
     if holdings_df.empty:
         st.info("No structured holdings data is available.")
         return
@@ -600,6 +797,32 @@ def display_holdings_tables(analysis_result: object) -> None:
     for column in ["累计独立损益(%)", "累计外汇损益(%)", "市值占比(%)"]:
         overview_display_df[column] = overview_display_df[column].map(format_percent_number)
 
+    strategy_display_df = strategy_holdings_df.copy()
+    for column in percent_columns:
+        if column in strategy_display_df.columns:
+            strategy_display_df[column] = strategy_display_df[column] * 100
+    strategy_display_df = strategy_display_df[overview_columns].rename(columns={
+        "Market": "策略",
+        "Position": "当前持仓",
+        "Current Price": "当前价格(LC)",
+        "Average Buy Price": "平均买入价格(LC)",
+        "Cost GBP": "成本(GBP)",
+        "Cumulative Return %": "累计独立损益(%)",
+        "Cumulative PnL GBP": "累计盈亏(GBP)",
+        "Cumulative FX Return %": "累计外汇损益(%)",
+        "Cumulative FX PnL GBP": "累计外汇损益(GBP)",
+        "Market Value GBP": "当前市值(GBP)",
+        "Market Value %": "市值占比(%)",
+        "Holding Days": "持有天数",
+        "Cumulative Dividend GBP": "累计分红",
+    })
+    for column in ["成本(GBP)", "累计盈亏(GBP)", "累计外汇损益(GBP)", "当前市值(GBP)", "累计分红"]:
+        strategy_display_df[column] = strategy_display_df[column].map(lambda value: format_value_with_unit(value, "GBP"))
+    for column in ["当前价格(LC)", "平均买入价格(LC)"]:
+        strategy_display_df[column] = strategy_display_df[column].map(format_plain_number)
+    strategy_display_df["持有天数"] = strategy_display_df["持有天数"].map(lambda value: format_integer_with_unit(value, "days"))
+    for column in ["累计独立损益(%)", "累计外汇损益(%)", "市值占比(%)"]:
+        strategy_display_df[column] = strategy_display_df[column].map(format_percent_number)
     daily_display_df = display_df[daily_columns].rename(columns={
         "Market": "市场",
         "Position": "当前持仓",
@@ -625,10 +848,18 @@ def display_holdings_tables(analysis_result: object) -> None:
         "Strategy": "策略",
     })
 
-    overview_tab, daily_tab, classification_tab = st.tabs(["持仓情况", "盈亏分析", "分类"])
+    overview_tab, strategy_tab, daily_tab, classification_tab = st.tabs(
+        ["持仓情况", "策略持仓情况", "盈亏分析", "分类"]
+    )
     with overview_tab:
         st.dataframe(
             overview_display_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+    with strategy_tab:
+        st.dataframe(
+            strategy_display_df,
             use_container_width=True,
             hide_index=True,
         )
@@ -841,9 +1072,10 @@ def run_followup_step(
     lookback_period: int,
     cumulative_start_date: object,
     cumulative_end_date: object,
-) -> tuple[int, str, list[bytes]]:
+) -> tuple[int, str, list[bytes], dict[str, object] | None]:
     buffer = StringIO()
     images: list[bytes] = []
+    cumulative_return_chart: dict[str, object] | None = None
     try:
         import matplotlib.pyplot as plt
 
@@ -886,12 +1118,15 @@ def run_followup_step(
 
         for figure_number in plt.get_fignums():
             figure = plt.figure(figure_number)
+            if step_name == "calculate_cumulative_contribution":
+                cumulative_return_chart = build_cumulative_return_chart_data(figure)
+                continue
             image_buffer = BytesIO()
             figure.savefig(image_buffer, format="png", bbox_inches="tight")
             image_buffer.seek(0)
             images.append(image_buffer.getvalue())
         plt.close("all")
-        return 0, buffer.getvalue(), images
+        return 0, buffer.getvalue(), images, cumulative_return_chart
     except Exception as exc:
         print(f"Streamlit follow-up error: {exc}", file=buffer)
-        return 1, buffer.getvalue(), images
+        return 1, buffer.getvalue(), images, cumulative_return_chart

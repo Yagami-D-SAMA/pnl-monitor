@@ -78,7 +78,7 @@ if __name__ == "__main__":
     # todo ETF price comparison
     # todo China US EU PMI/CPI/Macro data analysis
     # todo N/A, need to re calculate price
-    # todo daily run
+    # todo  daily run
     run_portfolio_daily_workflow(data_source='ALL', asset_type=True)
     # stock_monitor(90)
     # run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL')

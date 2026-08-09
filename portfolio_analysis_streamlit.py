@@ -10,6 +10,7 @@ import streamlit as st
 from utils.streamlit_portfolio_helpers import (
     build_number_column_config,
     build_position_options,
+    display_cumulative_return_chart,
     display_holdings_tables,
     display_market_value_messages,
     display_position_price_history_charts,
@@ -99,6 +100,8 @@ def main() -> None:
         st.session_state.followup_output = ""
     if "followup_images" not in st.session_state:
         st.session_state.followup_images = []
+    if "cumulative_return_chart" not in st.session_state:
+        st.session_state.cumulative_return_chart = None
     if "last_run_target_date" not in st.session_state:
         st.session_state.last_run_target_date = None
     if "last_run_data_source" not in st.session_state:
@@ -121,6 +124,7 @@ def main() -> None:
         st.session_state.pending_result = pending_result if code == 0 else None
         st.session_state.latest_analysis_result = pending_result if code == 0 else None
         st.session_state.pending_pnl_file = get_expected_pnl_file(data_source, target_date) if code == 0 else None
+        st.session_state.cumulative_return_chart = None
         st.session_state.followup_output = ""
         st.session_state.followup_images = []
         st.session_state.last_run_target_date = target_date if code == 0 else None
@@ -140,6 +144,7 @@ def main() -> None:
         st.session_state.pending_result = None
         st.session_state.latest_analysis_result = historical_result if code == 0 else None
         st.session_state.pending_pnl_file = None
+        st.session_state.cumulative_return_chart = None
         st.session_state.followup_output = ""
         st.session_state.followup_images = []
         st.session_state.last_run_target_date = target_date if code == 0 else None
@@ -178,6 +183,8 @@ def main() -> None:
         st.code(display_output or "Report output will appear here after running.", language="text")
     for image_index, image_bytes in enumerate(st.session_state.followup_images, start=1):
         st.image(image_bytes, caption=f"Follow-up chart {image_index}", use_container_width=True)
+    if st.session_state.cumulative_return_chart:
+        display_cumulative_return_chart(st.session_state.cumulative_return_chart)
 
     if st.session_state.last_code == 0 and st.session_state.latest_analysis_result is not None:
         st.markdown("### Position Zoom-In")
@@ -288,7 +295,7 @@ def main() -> None:
         for step_name, button_label in followup_steps:
             if st.button(button_label, key=f"followup_{step_name}", use_container_width=True):
                 with st.spinner(f"Running {button_label}..."):
-                    code, step_output, step_images = run_followup_step(
+                    code, step_output, step_images, cumulative_return_chart = run_followup_step(
                         step_name=step_name,
                         target_date=workflow_target_date,
                         data_source=workflow_data_source,
@@ -299,6 +306,8 @@ def main() -> None:
                 section_output = f"\n\n===== {button_label} =====\n{step_output}"
                 st.session_state.followup_output += section_output
                 st.session_state.followup_images.extend(step_images)
+                if cumulative_return_chart is not None:
+                    st.session_state.cumulative_return_chart = cumulative_return_chart
                 if code == 0:
                     st.success(f"{button_label} completed.")
                 else:
