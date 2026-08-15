@@ -16,11 +16,17 @@ from utils.analyzer import (
     display_upcoming_dividends
 )
 
-def run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL'):
+def run_portfolio_drawdown_monitor(
+    running_date=None,
+    lookback_period=90,
+    data_source='ALL',
+    selected_security=None,
+):
     return portfolio_drawdown_monitor(
         running_date=running_date,
         lookback_period=lookback_period,
         data_source=data_source,
+        selected_security=selected_security,
     )
 
 def run_dividend_display(running_date=None, data_source='ALL'):
@@ -38,6 +44,7 @@ def run_portfolio_daily_workflow(
     data_source='ALL',
     asset_type=True,
     lookback_period=90,
+    drawdown_security=None,
     cumulative_start_date='2025-12-31',
     cumulative_end_date='2026-07-09',
 ):
@@ -48,6 +55,7 @@ def run_portfolio_daily_workflow(
             running_date=running_date,
             lookback_period=lookback_period,
             data_source=data_source,
+            selected_security=drawdown_security,
         )
 
     if _ask_to_run("run_dividend_display"):
@@ -81,7 +89,9 @@ if __name__ == "__main__":
     # todo  daily run
     run_portfolio_daily_workflow(data_source='ALL', asset_type=True)
     # stock_monitor(90)
-    # run_portfolio_drawdown_monitor(running_date=None, lookback_period=90, data_source='ALL')
+    # run_portfolio_drawdown_monitor(
+    #     running_date=None, lookback_period=90, data_source='ALL', selected_security='GOOG'
+    # )
     # run_dividend_display(running_date=None, data_source='ALL')
     # export_industry_price_returns()
     # analyze_portfolio_industry_percentiles()

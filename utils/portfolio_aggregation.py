@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 
+import pandas as pd
+
 
 def _as_float(value: object) -> float:
     try:
@@ -78,3 +80,76 @@ def aggregate_holdings_by_strategy(
         strategy_rows.append(row)
 
     return sorted(strategy_rows, key=lambda item: item["standalone_bps"], reverse=True)
+
+
+def build_cumulative_strategy_return(
+    daily_strategy_data: Iterable[dict],
+    top_n: int = 5,
+    excluded_strategies: Iterable[str] = (),
+) -> pd.DataFrame:
+    """Build Base=1 returns for the largest strategies on the latest date."""
+    if top_n <= 0:
+        raise ValueError("top_n must be greater than zero")
+
+    records = pd.DataFrame(daily_strategy_data)
+    required_columns = {"date", "Strategy", "daily_pnl", "market_value"}
+    if records.empty or not required_columns.issubset(records.columns):
+        return pd.DataFrame()
+
+    records = records.loc[
+        :, ["date", "Strategy", "daily_pnl", "market_value"]
+    ].copy()
+    records["date"] = pd.to_datetime(records["date"], errors="coerce")
+    records["daily_pnl"] = pd.to_numeric(records["daily_pnl"], errors="coerce")
+    records["market_value"] = pd.to_numeric(
+        records["market_value"], errors="coerce"
+    )
+    records["Strategy"] = records["Strategy"].fillna("Unclassified").astype(str)
+    records = records.dropna(subset=["date", "daily_pnl", "market_value"])
+    excluded_names = {
+        str(strategy).strip().casefold()
+        for strategy in excluded_strategies
+        if str(strategy).strip()
+    }
+    if excluded_names:
+        strategy_names = records["Strategy"].str.strip().str.casefold()
+        records = records[~strategy_names.isin(excluded_names)]
+    if records.empty:
+        return pd.DataFrame()
+
+    latest_date = records["date"].max()
+    latest_market_value = (
+        records.loc[records["date"] == latest_date]
+        .groupby("Strategy")["market_value"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    selected_strategies = latest_market_value.head(top_n).index.tolist()
+    if not selected_strategies:
+        return pd.DataFrame()
+
+    records = records[records["Strategy"].isin(selected_strategies)]
+    daily_pnl = (
+        records.pivot_table(
+            index="date",
+            columns="Strategy",
+            values="daily_pnl",
+            aggfunc="sum",
+        )
+        .sort_index()
+        .reindex(columns=selected_strategies)
+        .fillna(0.0)
+        .astype(float)
+    )
+    market_value = records.pivot_table(
+        index="date",
+        columns="Strategy",
+        values="market_value",
+        aggfunc="sum",
+    ).reindex(index=daily_pnl.index, columns=selected_strategies)
+
+    daily_return = daily_pnl.divide(
+        market_value.where(market_value.ne(0))
+    ).fillna(0.0)
+    daily_return.iloc[0] = 0.0
+    return (1.0 + daily_return).cumprod()

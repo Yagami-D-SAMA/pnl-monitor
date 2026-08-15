@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from calendar import monthrange
 from datetime import date, datetime
 from pathlib import Path
 
 import streamlit as st
 
+from utils.streamlit_annual_return_analysis import (
+    display_historical_annual_return_analysis,
+)
 from utils.streamlit_portfolio_helpers import (
     build_number_column_config,
     build_position_options,
@@ -55,6 +59,19 @@ def parse_target_date(raw_value: str) -> date | None:
         return None
 
 
+def get_dividend_display_date_range(target_date: date) -> tuple[date, date]:
+    """Return the inclusive current-and-next-month dividend display window."""
+    window_start = target_date.replace(day=1)
+    next_month_year = window_start.year + (window_start.month // 12)
+    next_month = (window_start.month % 12) + 1
+    window_end = date(
+        next_month_year,
+        next_month,
+        monthrange(next_month_year, next_month)[1],
+    )
+    return window_start, window_end
+
+
 def main() -> None:
     st.set_page_config(page_title="Portfolio Analysis UI", layout="wide")
     st.title("Portfolio Analysis UI")
@@ -100,8 +117,12 @@ def main() -> None:
         st.session_state.followup_output = ""
     if "followup_images" not in st.session_state:
         st.session_state.followup_images = []
-    if "cumulative_return_chart" not in st.session_state:
-        st.session_state.cumulative_return_chart = None
+    if "cumulative_charts" not in st.session_state:
+        st.session_state.cumulative_charts = []
+    if "drawdown_chart_images" not in st.session_state:
+        st.session_state.drawdown_chart_images = []
+    if "drawdown_chart_securities" not in st.session_state:
+        st.session_state.drawdown_chart_securities = []
     if "last_run_target_date" not in st.session_state:
         st.session_state.last_run_target_date = None
     if "last_run_data_source" not in st.session_state:
@@ -124,7 +145,9 @@ def main() -> None:
         st.session_state.pending_result = pending_result if code == 0 else None
         st.session_state.latest_analysis_result = pending_result if code == 0 else None
         st.session_state.pending_pnl_file = get_expected_pnl_file(data_source, target_date) if code == 0 else None
-        st.session_state.cumulative_return_chart = None
+        st.session_state.cumulative_charts = []
+        st.session_state.drawdown_chart_images = []
+        st.session_state.drawdown_chart_securities = []
         st.session_state.followup_output = ""
         st.session_state.followup_images = []
         st.session_state.last_run_target_date = target_date if code == 0 else None
@@ -144,7 +167,9 @@ def main() -> None:
         st.session_state.pending_result = None
         st.session_state.latest_analysis_result = historical_result if code == 0 else None
         st.session_state.pending_pnl_file = None
-        st.session_state.cumulative_return_chart = None
+        st.session_state.cumulative_charts = []
+        st.session_state.drawdown_chart_images = []
+        st.session_state.drawdown_chart_securities = []
         st.session_state.followup_output = ""
         st.session_state.followup_images = []
         st.session_state.last_run_target_date = target_date if code == 0 else None
@@ -183,8 +208,8 @@ def main() -> None:
         st.code(display_output or "Report output will appear here after running.", language="text")
     for image_index, image_bytes in enumerate(st.session_state.followup_images, start=1):
         st.image(image_bytes, caption=f"Follow-up chart {image_index}", use_container_width=True)
-    if st.session_state.cumulative_return_chart:
-        display_cumulative_return_chart(st.session_state.cumulative_return_chart)
+    for cumulative_chart in st.session_state.cumulative_charts:
+        display_cumulative_return_chart(cumulative_chart)
 
     if st.session_state.last_code == 0 and st.session_state.latest_analysis_result is not None:
         st.markdown("### Position Zoom-In")
@@ -269,10 +294,39 @@ def main() -> None:
     if st.session_state.last_code == 0:
         workflow_target_date = st.session_state.last_run_target_date or target_date
         workflow_data_source = st.session_state.last_run_data_source or data_source
+        dividend_window_start, dividend_window_end = get_dividend_display_date_range(
+            workflow_target_date
+        )
         st.markdown("### Follow-up Workflow")
         st.caption("Run these in the same order as run_portfolio_daily_workflow after analyze_portfolio.")
         st.write(f"Workflow date: `{workflow_target_date.strftime('%Y-%m-%d')}`, data source: `{workflow_data_source}`")
         lookback_period = st.number_input("Drawdown lookback period", min_value=1, value=90, step=1)
+        drawdown_position_options = build_position_options(
+            st.session_state.latest_analysis_result or {}
+        )
+        drawdown_ticker_map = (
+            st.session_state.latest_analysis_result or {}
+        ).get("market_ticker_map", {})
+        selected_drawdown_securities = []
+        if drawdown_position_options:
+            selected_drawdown_securities = st.multiselect(
+                "Drawdown chart securities",
+                drawdown_position_options,
+                format_func=lambda market: (
+                    f"{market} | {drawdown_ticker_map[market]}"
+                    if drawdown_ticker_map.get(market)
+                    else market
+                ),
+                max_selections=10,
+                placeholder="Select up to 10 current positions",
+                help="Each selected security is displayed in its own chart and price range.",
+            )
+            st.caption(
+                f"{len(selected_drawdown_securities)} selected from "
+                f"{len(drawdown_position_options)} current positions."
+            )
+        else:
+            st.info("No current positions are available for the drawdown chart.")
         date_cols = st.columns(2)
         with date_cols[0]:
             cumulative_start_date = st.date_input(
@@ -287,33 +341,81 @@ def main() -> None:
 
         followup_steps = [
             ("prompt_for_constituents", "Display index top constituents"),
-            ("run_portfolio_drawdown_monitor", "Run portfolio drawdown monitor"),
+            ("run_portfolio_drawdown_monitor", "Load selected securities drawdown charts"),
             ("run_dividend_display", "Run dividend display"),
             ("analyze_portfolio_industry_percentiles", "Run industry percentiles"),
             ("calculate_cumulative_contribution", "Run cumulative contribution"),
         ]
         for step_name, button_label in followup_steps:
-            if st.button(button_label, key=f"followup_{step_name}", use_container_width=True):
+            if step_name == "run_dividend_display":
+                st.caption(
+                    "Dividend payment date range: "
+                    f"`{dividend_window_start:%Y-%m-%d}` to "
+                    f"`{dividend_window_end:%Y-%m-%d}` (inclusive). "
+                    "Next-dividend lookup starts from workflow date "
+                    f"`{workflow_target_date:%Y-%m-%d}`."
+                )
+            drawdown_selection_required = (
+                step_name == "run_portfolio_drawdown_monitor"
+                and not selected_drawdown_securities
+            )
+            if st.button(
+                button_label,
+                key=f"followup_{step_name}",
+                use_container_width=True,
+                disabled=drawdown_selection_required,
+            ):
                 with st.spinner(f"Running {button_label}..."):
-                    code, step_output, step_images, cumulative_return_chart = run_followup_step(
+                    code, step_output, step_images, cumulative_charts = run_followup_step(
                         step_name=step_name,
                         target_date=workflow_target_date,
                         data_source=workflow_data_source,
                         lookback_period=int(lookback_period),
                         cumulative_start_date=cumulative_start_date,
                         cumulative_end_date=cumulative_end_date,
+                        drawdown_securities=selected_drawdown_securities,
                     )
                 section_output = f"\n\n===== {button_label} =====\n{step_output}"
                 st.session_state.followup_output += section_output
-                st.session_state.followup_images.extend(step_images)
-                if cumulative_return_chart is not None:
-                    st.session_state.cumulative_return_chart = cumulative_return_chart
+                if step_name == "run_portfolio_drawdown_monitor":
+                    st.session_state.drawdown_chart_images = list(step_images)
+                    st.session_state.drawdown_chart_securities = list(
+                        selected_drawdown_securities
+                    )
+                else:
+                    st.session_state.followup_images.extend(step_images)
+                if cumulative_charts:
+                    st.session_state.cumulative_charts = cumulative_charts
                 if code == 0:
                     st.success(f"{button_label} completed.")
                 else:
                     st.error(f"{button_label} failed.")
                 st.rerun()
 
+        if (
+            st.session_state.drawdown_chart_images
+            and st.session_state.drawdown_chart_securities
+            == selected_drawdown_securities
+        ):
+            selected_tickers = [
+                drawdown_ticker_map.get(security, security)
+                for security in selected_drawdown_securities
+            ]
+            st.caption("Drawdown charts: " + ", ".join(selected_tickers))
+            chart_images = st.session_state.drawdown_chart_images
+            for row_start in range(0, len(chart_images), 2):
+                chart_columns = st.columns(2)
+                for column, chart_image in zip(
+                    chart_columns,
+                    chart_images[row_start : row_start + 2],
+                ):
+                    column.image(chart_image, use_container_width=True)
+
+
+    display_historical_annual_return_analysis(
+        pnl_dir=PROJECT_ROOT / "investment" / "Daily Pnl",
+        data_source=data_source,
+    )
 
     st.download_button(
         "Download report",

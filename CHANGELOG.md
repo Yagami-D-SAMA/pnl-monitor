@@ -5,6 +5,61 @@ This file records substantial project changes. Add new entries under
 
 ## Unreleased
 ### Portfolio Analysis
+- 2026-08-12: Extended historical annual-return analysis with a Portfolio
+  annual summary showing total PnL in GBP for each selected year. Comparison
+  metrics now include annualized Sharpe ratio. The risk-free rate is the mean
+  daily US 10-year Treasury yield (`^TNX`) over each year's actual analysis
+  period, and Sharpe is calculated from daily excess returns using 252 trading
+  days. Benchmark and Treasury data are downloaded together; missing Treasury
+  data produces a warning and leaves Sharpe unavailable without failing the
+  remaining analysis. No Daily PnL or investment data is written or modified.
+  Validation: 15 offline tests, a live Treasury/index data smoke test, live
+  Streamlit interaction verification, and a Daily PnL directory fingerprint
+  check.
+
+- 2026-08-11: Replaced the drawdown monitor's all-position 52-week range chart
+  with selectable price distribution charts. The Streamlit multiselect is
+  sourced from every `current_positions` entry, starts empty, and accepts up to
+  10 positions. Each selected ticker is drawn in a separate chart with its own
+  dynamic local-price range, distribution color, latest-price marker, and mean
+  +/- one sample standard deviation marker; each new run replaces all previous
+  drawdown charts. The compact charts use a dark visual theme and are displayed
+  in a responsive two-column Streamlit grid. Yahoo `info` does not expose a
+  standard-deviation field, so 1 SD is calculated from each security's same
+  lookback closing-price series. Single-string IDE calls remain compatible. The
+  existing portfolio drawdown table and calculations are unchanged. No
+  investment data is written. Validation: 14 offline tests, syntax checks, a
+  live yfinance chart smoke test, and live Streamlit UI verification.
+
+- 2026-08-11: Added a read-only historical annual-return analysis section to
+  Streamlit. It audits Daily PnL filename coverage against NYSE and LSE
+  calendars, separates true missing trading days from weekends and exchange
+  holidays, identifies full calendar years, and compares Portfolio returns,
+  volatility, drawdown, and cumulative paths with selectable global indices.
+  Existing report, save, and follow-up workflows are unchanged, and no Daily
+  PnL file is written or modified. Validation: offline unit tests, full local
+  pickle smoke test, Streamlit UI verification, and directory fingerprint check.
+
+- 2026-08-10: Added an interactive Strategy cumulative-return chart to the
+  cumulative-contribution workflow. The chart excludes Money Market, then
+  displays the five strategies with the largest market values on the latest
+  available date. It compounds daily Strategy PnL divided by Strategy market
+  value from a Base=1 start and uses the existing Strategy fallback rules.
+  Missing strategy dates contribute zero. The Strategy legend is clickable:
+  the selected path is emphasized while unselected paths fade. Streamlit renders
+  both cumulative charts in order with shared hover dates and vertical
+  crosshairs. Both charts retain every dated observation and use an adaptive
+  date axis: weekly DD-Mon-YY ticks for short ranges and monthly Mon-YY ticks
+  for longer ranges, with the exact date remaining available on hover. No persisted data schema
+  changes. Validation: aggregation unit tests, syntax checks, local-PnL smoke
+  test, Altair chart smoke test, and live Streamlit verification.
+
+- 2026-08-09: Removed current-price and average-buy-price columns from the
+  strategy-level holdings tables in both Streamlit and the console report,
+  because those local-currency prices are not meaningful across aggregated
+  positions. Position-level holdings remain unchanged. Validation: focused
+  table checks, syntax checks, live Streamlit verification, and whitespace
+  checks.
 
 - 2026-08-08: Added a strategy-level holdings table to the console PnL report
   and Streamlit holdings tabs. Amounts are summed by strategy, percentage

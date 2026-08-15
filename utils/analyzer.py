@@ -5,7 +5,8 @@ import pickle
 from tabulate import tabulate
 import yfinance as yf
 import matplotlib.pyplot as plt
-from utils.Calculator import is_weekend
+from utils.Calculator import aggregate_daily_pnl, is_weekend
+from utils.portfolio_aggregation import build_cumulative_strategy_return
 from pathlib import Path
 import re
 from utils.ticker_harvest import read_h5, OUTPUT_DIR, H5_KEY
@@ -296,7 +297,222 @@ def analyze_portfolio(
     except Exception as e:
         print(f"分析过程中发生错误: {e}")
 
-def portfolio_drawdown_monitor(running_date: object = None, lookback_period: int = 90, data_source: object = 'ALL') -> pd.DataFrame:
+def calculate_price_distribution_stats(close_prices: pd.Series) -> dict[str, float]:
+    """Calculate price-level statistics for the drawdown distribution chart."""
+    prices = pd.to_numeric(close_prices, errors="coerce").dropna().astype(float)
+    if prices.empty:
+        raise ValueError("At least one valid closing price is required")
+
+    standard_deviation = float(prices.std(ddof=1)) if len(prices) > 1 else 0.0
+    mean_price = float(prices.mean())
+    return {
+        "minimum": float(prices.min()),
+        "maximum": float(prices.max()),
+        "mean": mean_price,
+        "standard_deviation": standard_deviation,
+        "lower_1sd": mean_price - standard_deviation,
+        "upper_1sd": mean_price + standard_deviation,
+        "latest": float(prices.iloc[-1]),
+    }
+
+
+def normalize_selected_securities(selected_security: object) -> list[str]:
+    """Normalize a single security or an iterable into unique display values."""
+    if selected_security is None:
+        return []
+    if isinstance(selected_security, str):
+        raw_selections = [selected_security]
+    else:
+        try:
+            raw_selections = list(selected_security)
+        except TypeError:
+            raw_selections = [selected_security]
+
+    selections = []
+    seen = set()
+    for value in raw_selections:
+        selection = str(value).strip()
+        normalized = selection.casefold()
+        if selection and normalized not in seen:
+            selections.append(selection)
+            seen.add(normalized)
+    return selections
+
+
+def _plot_security_price_distribution(
+    close_prices: pd.Series,
+    ticker: str,
+    running_date: datetime,
+    lookback_period: int,
+    color: object,
+) -> object:
+    prices = pd.to_numeric(close_prices, errors="coerce").dropna().astype(float)
+    if prices.empty:
+        raise ValueError("At least one valid closing price is required")
+
+    stats = calculate_price_distribution_stats(prices)
+    position = 1
+    chart_background = "#111318"
+    figure, axis = plt.subplots(
+        figsize=(6.0, 3.8),
+        facecolor=chart_background,
+    )
+    axis.set_facecolor(chart_background)
+    if len(prices) > 1 and prices.nunique() > 1:
+        violin = axis.violinplot(
+            prices.to_numpy(),
+            positions=[position],
+            widths=0.70,
+            showmeans=False,
+            showmedians=False,
+            showextrema=False,
+        )
+        for body in violin["bodies"]:
+            body.set_facecolor(color)
+            body.set_edgecolor(color)
+            body.set_alpha(0.42)
+            body.set_linewidth(1.3)
+
+    axis.scatter(
+        [position] * len(prices),
+        prices,
+        color=color,
+        s=12,
+        alpha=0.75,
+        linewidths=0,
+        zorder=2,
+    )
+    axis.errorbar(
+        [position + 0.18],
+        [stats["mean"]],
+        yerr=[[stats["standard_deviation"]], [stats["standard_deviation"]]],
+        fmt="D",
+        color="#b45309",
+        ecolor="#f59e0b",
+        elinewidth=4,
+        capsize=8,
+        capthick=2,
+        markersize=6,
+        zorder=4,
+        label="Mean +/- 1 SD",
+    )
+    axis.scatter(
+        [position],
+        [stats["latest"]],
+        marker="X",
+        color="#f8fafc",
+        edgecolors=color,
+        linewidths=1.5,
+        s=145,
+        zorder=5,
+        label="Latest price",
+    )
+    axis.annotate(
+        f"{stats['latest']:,.2f}",
+        (position, stats["latest"]),
+        xytext=(0, 9),
+        textcoords="offset points",
+        ha="center",
+        fontsize=8,
+        color="#f8fafc",
+    )
+
+    plotted_low = min(stats["minimum"], stats["lower_1sd"], stats["latest"])
+    plotted_high = max(stats["maximum"], stats["upper_1sd"], stats["latest"])
+    price_span = plotted_high - plotted_low
+    padding = max(price_span * 0.08, abs(plotted_high) * 0.005, 0.01)
+    lower_limit = plotted_low - padding
+    if plotted_low >= 0 and lower_limit < 0:
+        lower_limit = 0
+    axis.set_ylim(lower_limit, plotted_high + padding)
+    axis.set_xlim(0.45, 1.55)
+    axis.set_xticks([position])
+    axis.set_xticklabels([ticker])
+    axis.set_xlabel("Security", color="#e5e7eb", fontsize=8)
+    axis.set_ylabel("Price (local currency)", color="#e5e7eb", fontsize=8)
+    axis.set_title(
+        f"{ticker} Price Distribution | {lookback_period}-Day Lookback\n"
+        f"As of {running_date.strftime('%Y-%m-%d')}",
+        color="#f8fafc",
+        fontsize=10,
+    )
+    axis.tick_params(axis="both", colors="#d1d5db", labelsize=8)
+    for spine in axis.spines.values():
+        spine.set_color("#343944")
+    axis.grid(axis="y", color="#343944", alpha=0.75, linewidth=0.8)
+    legend = axis.legend(
+        loc="best",
+        facecolor="#171a21",
+        edgecolor="#343944",
+        fontsize=8,
+    )
+    for legend_text in legend.get_texts():
+        legend_text.set_color("#e5e7eb")
+    figure.tight_layout(pad=1.0)
+    return figure
+
+
+def plot_security_price_distribution(
+    close_prices: pd.Series,
+    ticker: str,
+    running_date: datetime,
+    lookback_period: int,
+) -> object:
+    """Plot one security's price distribution on its own price axis."""
+    return _plot_security_price_distribution(
+        close_prices=close_prices,
+        ticker=ticker,
+        running_date=running_date,
+        lookback_period=lookback_period,
+        color="#67b7ff",
+    )
+
+
+def plot_security_price_distributions(
+    price_series_by_ticker: dict[str, pd.Series],
+    running_date: datetime,
+    lookback_period: int,
+) -> list[object]:
+    """Plot each selected security in a separate figure and price range."""
+    valid_price_series = []
+    for ticker, close_prices in price_series_by_ticker.items():
+        prices = pd.to_numeric(close_prices, errors="coerce").dropna().astype(float)
+        if not prices.empty:
+            valid_price_series.append((ticker, prices))
+
+    if not valid_price_series:
+        raise ValueError("At least one security with valid closing prices is required")
+
+    chart_colors = [
+        "#67b7ff",
+        "#ff7b72",
+        "#7ee787",
+        "#d2a8ff",
+        "#39d0c8",
+        "#ffa657",
+        "#79c0ff",
+        "#f2cc60",
+        "#a5d6ff",
+        "#ec8e2c",
+    ]
+    return [
+        _plot_security_price_distribution(
+            close_prices=prices,
+            ticker=ticker,
+            running_date=running_date,
+            lookback_period=lookback_period,
+            color=chart_colors[index % len(chart_colors)],
+        )
+        for index, (ticker, prices) in enumerate(valid_price_series)
+    ]
+
+
+def portfolio_drawdown_monitor(
+    running_date: object = None,
+    lookback_period: int = 90,
+    data_source: object = 'ALL',
+    selected_security: object = None,
+) -> pd.DataFrame:
     """Monitor max drawdown for current portfolio positions over a lookback period."""
     portfolio_context = _load_portfolio_context(running_date, data_source)
     if portfolio_context is None:
@@ -309,6 +525,9 @@ def portfolio_drawdown_monitor(running_date: object = None, lookback_period: int
     end_date = running_date + pd.Timedelta(days=1)
 
     drawdown_rows = []
+    selected_securities = normalize_selected_securities(selected_security)
+    requested_security_keys = [selection.casefold() for selection in selected_securities]
+    selected_price_data_by_request = {}
     for market, position_data in current_positions.items():
         ticker = market_ticker_map.get(market)
         if not ticker:
@@ -326,6 +545,15 @@ def portfolio_drawdown_monitor(running_date: object = None, lookback_period: int
             if close_prices.empty:
                 print(f"{ticker}: Close价格为空，跳过")
                 continue
+
+            security_aliases = {str(market).casefold(), str(ticker).casefold()}
+            for requested_security_key in requested_security_keys:
+                if requested_security_key in security_aliases:
+                    selected_price_data_by_request[requested_security_key] = {
+                        "market": market,
+                        "ticker": ticker,
+                        "close_prices": close_prices.copy(),
+                    }
 
             running_peak = close_prices.cummax()
             drawdown = close_prices / running_peak - 1
@@ -413,52 +641,47 @@ def portfolio_drawdown_monitor(running_date: object = None, lookback_period: int
         disable_numparse=True,
     ))
 
-    plot_df = result_df.dropna(subset=["52_week_low", "52_week_high", "latest_price", "52_week_position_pct"]).copy()
-    plot_df = plot_df[plot_df["52_week_high"] > plot_df["52_week_low"]]
-    if plot_df.empty:
-        print("没有足够的52 week区间数据用于画图")
+    selected_price_series = {}
+    loaded_security_labels = []
+    missing_securities = []
+    for selection, selection_key in zip(selected_securities, requested_security_keys):
+        selected_data = selected_price_data_by_request.get(selection_key)
+        if selected_data is None:
+            missing_securities.append(selection)
+            continue
+        selected_price_series.setdefault(
+            selected_data["ticker"],
+            selected_data["close_prices"],
+        )
+        loaded_security_labels.append(
+            f"{selected_data['ticker']} | {selected_data['market']}"
+        )
+
+    if not selected_securities:
+        print("Price distribution chart skipped: select one or more securities to load.")
+    elif not selected_price_series:
+        print(
+            "Price distribution chart skipped: none of the selected securities "
+            "were available in the drawdown results."
+        )
     else:
-        plot_df = plot_df.sort_values("current_drawdown")
-        labels = plot_df["ticker"] + " | " + plot_df["market"]
-        y_positions = range(len(plot_df))
-
-        plt.figure(figsize=(12, max(6, len(plot_df) * 0.45)))
-        plt.hlines(
-            y=y_positions,
-            xmin=0,
-            xmax=100,
-            color="#9aa0a6",
-            linewidth=5,
-            alpha=0.8,
-            label="52 Week Range",
+        plot_security_price_distributions(
+            price_series_by_ticker=selected_price_series,
+            running_date=running_date,
+            lookback_period=lookback_period,
         )
-        plt.scatter(
-            plot_df["52_week_position_pct"],
-            y_positions,
-            color="#d62728",
-            s=80,
-            zorder=3,
-            label="Current Price",
+        print(
+            f"Price distribution chart loaded for {', '.join(loaded_security_labels)}. "
+            "Yahoo info does not expose standard deviation; 1 SD is calculated "
+            "from each security's selected-lookback closing prices."
         )
-        for y, (_, row) in zip(y_positions, plot_df.iterrows()):
-            plt.text(
-                row["52_week_position_pct"],
-                y + 0.15,
-                f"{row['latest_price']:,.2f}",
-                ha="center",
-                fontsize=8,
+        if missing_securities:
+            print(
+                "Price distribution data was unavailable for: "
+                + ", ".join(missing_securities)
             )
-            plt.text(0, y - 0.2, f"L {row['52_week_low']:,.2f}", ha="left", fontsize=8, color="#5f6368")
-            plt.text(100, y - 0.2, f"H {row['52_week_high']:,.2f}", ha="right", fontsize=8, color="#5f6368")
-
-        plt.yticks(list(y_positions), labels)
-        plt.xlim(-3, 103)
-        plt.xlabel("Position in 52 Week Range (Low = 0%, High = 100%)")
-        plt.title(f"Current Price Position vs 52 Week Range ({running_date.strftime('%Y-%m-%d')})")
-        plt.grid(axis="x", alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
+        if plt.get_backend().casefold() != "agg":
+            plt.show()
 
     return result_df
 
@@ -847,6 +1070,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         
         # 存储所有日期的数据
         all_daily_data = []
+        daily_strategy_data = []
 
         # 定义指数列表
         indices = {
@@ -952,6 +1176,26 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
                         'total_non_fx_pnl': daily_pnl_result['total_non_fx_pnl'],
                         'total_market_value': daily_pnl_result['total_market_value']
                     })
+                    strategy_pnl = aggregate_daily_pnl(
+                        daily_pnl_result.get('market_details', []),
+                        'Strategy',
+                        fallback_key='market',
+                    )
+                    strategy_market_value = aggregate_daily_pnl(
+                        daily_pnl_result.get('market_details', []),
+                        'Strategy',
+                        pnl_key='market_value',
+                        fallback_key='market',
+                    )
+                    daily_strategy_data.extend(
+                        {
+                            'date': date,
+                            'Strategy': strategy,
+                            'daily_pnl': strategy_pnl.get(strategy, 0.0),
+                            'market_value': market_value,
+                        }
+                        for strategy, market_value in strategy_market_value.items()
+                    )
 
         # 只显示最近10天的数据
         recent_data = all_daily_data[-10:] if len(all_daily_data) > 10 else all_daily_data
@@ -1035,6 +1279,33 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
+
+            strategy_cumulative_return = build_cumulative_strategy_return(
+                daily_strategy_data,
+                top_n=5,
+                excluded_strategies={"Money Market"},
+            )
+            if not strategy_cumulative_return.empty:
+                plt.figure(figsize=(12, 6))
+                for strategy in strategy_cumulative_return.columns:
+                    plt.plot(
+                        strategy_cumulative_return.index,
+                        strategy_cumulative_return[strategy],
+                        label=strategy,
+                        linewidth=2,
+                    )
+                plt.title(
+                    f"Top 5 Strategy Cumulative Return "
+                    f"({start_date_str} to {end_date_str})"
+                )
+                plt.xlabel("Date")
+                plt.ylabel("Cumulative Return (Base = 1)")
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+                plt.tight_layout()
+            else:
+                print("No Strategy return data is available for the selected date range.")
+
             plt.show()
 
             print(f"\n汇总信息:")
