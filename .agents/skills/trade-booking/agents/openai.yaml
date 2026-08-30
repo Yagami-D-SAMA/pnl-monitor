@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trade Booking Safety"
+  short_description: "Back up trade files before every booking update"
+  default_prompt: "Use $trade-booking to safely book a transaction after preserving the original file."

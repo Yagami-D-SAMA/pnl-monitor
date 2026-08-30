@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yikai Coding Practice"
+  short_description: "Project engineering standards for safe Python changes"
+  default_prompt: "Use $coding-practice to implement this change using the project engineering standards."

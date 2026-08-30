@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yikai Project Operational Memory"
+  short_description: "Avoid repeated project runtime and workflow mistakes"
+  default_prompt: "Use $project-operational-memory to check known project pitfalls before running or changing code."
