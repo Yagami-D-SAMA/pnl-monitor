@@ -7,6 +7,10 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from utils.Calculator import aggregate_daily_pnl, is_weekend
 from utils.portfolio_aggregation import build_cumulative_strategy_return
+from utils.annual_return_analysis import (
+    TRADING_DAYS_PER_YEAR,
+    _extract_close_series,
+)
 from pathlib import Path
 import re
 from utils.ticker_harvest import read_h5, OUTPUT_DIR, H5_KEY
@@ -339,6 +343,50 @@ def normalize_selected_securities(selected_security: object) -> list[str]:
     return selections
 
 
+def fetch_close_prices_batch(
+    tickers: list[str],
+    start_date: datetime,
+    end_date: datetime,
+) -> dict[str, pd.Series]:
+    """Fetch adjusted closes for multiple securities in one yfinance request."""
+    unique_tickers = list(dict.fromkeys(ticker for ticker in tickers if ticker))
+    if not unique_tickers:
+        return {}
+
+    try:
+        downloaded = yf.download(
+            tickers=unique_tickers,
+            start=pd.Timestamp(start_date).strftime("%Y-%m-%d"),
+            end=pd.Timestamp(end_date).strftime("%Y-%m-%d"),
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+            threads=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        print(f"yfinance 批量价格下载失败: {exc}")
+        return {}
+
+    close_prices_by_ticker = {}
+    for ticker in unique_tickers:
+        close_prices = pd.to_numeric(
+            _extract_close_series(downloaded, ticker),
+            errors="coerce",
+        ).dropna()
+        if close_prices.empty:
+            print(f"{ticker}: yfinance 批量下载没有返回 Close 价格")
+            continue
+        close_prices.index = pd.to_datetime(close_prices.index)
+        if close_prices.index.tz is not None:
+            close_prices.index = close_prices.index.tz_localize(None)
+        close_prices_by_ticker[ticker] = close_prices[
+            ~close_prices.index.duplicated(keep="last")
+        ].sort_index()
+
+    return close_prices_by_ticker
+
+
 def _plot_security_price_distribution(
     close_prices: pd.Series,
     ticker: str,
@@ -524,6 +572,21 @@ def portfolio_drawdown_monitor(
     start_date = running_date - pd.Timedelta(days=lookback_period)
     end_date = running_date + pd.Timedelta(days=1)
 
+    position_tickers = [
+        market_ticker_map.get(market)
+        for market in current_positions
+        if market_ticker_map.get(market)
+    ]
+    history_start_date = min(
+        start_date,
+        running_date - pd.Timedelta(days=365),
+    )
+    close_prices_by_ticker = fetch_close_prices_batch(
+        tickers=position_tickers,
+        start_date=history_start_date,
+        end_date=end_date,
+    )
+
     drawdown_rows = []
     selected_securities = normalize_selected_securities(selected_security)
     requested_security_keys = [selection.casefold() for selection in selected_securities]
@@ -535,13 +598,15 @@ def portfolio_drawdown_monitor(
             continue
 
         try:
-            stock = yf.Ticker(ticker)
-            hist_data = stock.history(start=start_date, end=end_date)
-            if hist_data.empty or "Close" not in hist_data.columns:
+            full_close_prices = close_prices_by_ticker.get(ticker)
+            if full_close_prices is None:
                 print(f"{ticker}: 没有可用价格数据，跳过")
                 continue
 
-            close_prices = hist_data["Close"].dropna()
+            close_prices = full_close_prices.loc[
+                (full_close_prices.index >= pd.Timestamp(start_date))
+                & (full_close_prices.index <= pd.Timestamp(running_date))
+            ]
             if close_prices.empty:
                 print(f"{ticker}: Close价格为空，跳过")
                 continue
@@ -561,11 +626,20 @@ def portfolio_drawdown_monitor(
             trough_date = drawdown.idxmin()
             peak_date = close_prices.loc[:trough_date].idxmax()
             current_drawdown = close_prices.iloc[-1] / running_peak.iloc[-1] - 1
-            info = stock.info or {}
-            fifty_two_week_low = info.get("fiftyTwoWeekLow")
-            fifty_two_week_high = info.get("fiftyTwoWeekHigh")
-            if fifty_two_week_low is None or fifty_two_week_high is None:
-                print(f"{ticker}: yf.info 中没有 fiftyTwoWeekLow/fiftyTwoWeekHigh")
+            fifty_two_week_prices = full_close_prices.loc[
+                (full_close_prices.index >= running_date - pd.Timedelta(days=365))
+                & (full_close_prices.index <= pd.Timestamp(running_date))
+            ]
+            fifty_two_week_low = (
+                float(fifty_two_week_prices.min())
+                if not fifty_two_week_prices.empty
+                else None
+            )
+            fifty_two_week_high = (
+                float(fifty_two_week_prices.max())
+                if not fifty_two_week_prices.empty
+                else None
+            )
             if (
                 fifty_two_week_low is not None
                 and fifty_two_week_high is not None
@@ -672,8 +746,8 @@ def portfolio_drawdown_monitor(
         )
         print(
             f"Price distribution chart loaded for {', '.join(loaded_security_labels)}. "
-            "Yahoo info does not expose standard deviation; 1 SD is calculated "
-            "from each security's selected-lookback closing prices."
+            "Prices were fetched in one batched yfinance request; 1 SD is calculated "
+            "from each security's selected-lookback closing prices already in memory."
         )
         if missing_securities:
             print(
@@ -1048,13 +1122,226 @@ def load_historical_pnl(target_date_str, data_source='ALL'):
         print(f"加载历史数据时发生错误: {e}")
 
 
-def calculate_cumulative_contribution(start_date_str, end_date_str, data_source='ALL'):
+def _select_close_prices(
+    history: pd.DataFrame,
+    start_date: object,
+    end_date: object,
+) -> pd.Series:
+    """Return valid close prices within an inclusive date range."""
+    if history.empty or "Close" not in history.columns:
+        return pd.Series(dtype=float)
+
+    close_prices = pd.to_numeric(history["Close"], errors="coerce").dropna()
+    if close_prices.empty:
+        return pd.Series(dtype=float)
+
+    close_prices.index = pd.to_datetime(close_prices.index)
+    if close_prices.index.tz is not None:
+        close_prices.index = close_prices.index.tz_localize(None)
+
+    return close_prices.loc[
+        (close_prices.index >= pd.Timestamp(start_date))
+        & (close_prices.index <= pd.Timestamp(end_date))
+    ].sort_index()
+
+
+def build_daily_close_return_bps(history: pd.DataFrame) -> pd.Series:
+    """Return close-to-close daily returns in basis points by normalized date."""
+    if history.empty or "Close" not in history.columns:
+        return pd.Series(dtype=float)
+
+    close_prices = pd.to_numeric(history["Close"], errors="coerce").dropna()
+    if len(close_prices) < 2:
+        return pd.Series(dtype=float)
+
+    close_prices.index = pd.to_datetime(close_prices.index)
+    if close_prices.index.tz is not None:
+        close_prices.index = close_prices.index.tz_localize(None)
+    close_prices = close_prices[
+        ~close_prices.index.duplicated(keep="last")
+    ].sort_index()
+
+    daily_returns_bps = close_prices.pct_change(fill_method=None).mul(10000).dropna()
+    daily_returns_bps.index = daily_returns_bps.index.normalize()
+    return daily_returns_bps
+
+
+def _daily_index_contribution_bps(
+    daily_returns_bps: pd.Series,
+    target_date: object,
+) -> float | None:
+    """Return index daily bps; use zero when the index has no session that day."""
+    if daily_returns_bps.empty:
+        return None
+
+    normalized_date = pd.Timestamp(target_date).normalize()
+    return float(daily_returns_bps.get(normalized_date, 0.0))
+
+
+def format_daily_contribution_table(daily_data: list[dict[str, object]]) -> str:
+    """Format the daily contribution report with wide-character-aware columns."""
+    headers = [
+        "日期",
+        "当日贡献度(bps)",
+        "当日贡献度 SPX(bps)",
+        "当日贡献度 NASDAQ(bps)",
+        "当日总盈亏(GBP)",
+        "当日外汇盈亏(GBP)",
+        "当日非外汇盈亏(GBP)",
+        "当日总市值(GBP)",
+    ]
+    rows = []
+    for data in daily_data:
+        sp500_contribution = data.get("sp500_contribution")
+        nasdaq_contribution = data.get("nasdaq_contribution")
+        rows.append(
+            [
+                pd.Timestamp(data["date"]).strftime("%Y-%m-%d"),
+                f"{float(data['contribution']):,.2f}",
+                (
+                    f"{float(sp500_contribution):,.2f}"
+                    if sp500_contribution is not None
+                    else "N/A"
+                ),
+                (
+                    f"{float(nasdaq_contribution):,.2f}"
+                    if nasdaq_contribution is not None
+                    else "N/A"
+                ),
+                f"{float(data['total_daily_pnl']):,.2f}",
+                f"{float(data['total_fx_pnl']):,.2f}",
+                f"{float(data['total_non_fx_pnl']):,.2f}",
+                f"{float(data['total_market_value']):,.2f}",
+            ]
+        )
+
+    return tabulate(
+        rows,
+        headers=headers,
+        tablefmt="simple",
+        colalign=("left", "right", "right", "right", "right", "right", "right", "right"),
+        disable_numparse=True,
+    )
+
+
+def calculate_annualized_close_volatility(
+    history: pd.DataFrame,
+    start_date: object,
+    end_date: object,
+) -> float | None:
+    """Return annualized close-to-close volatility as a percentage."""
+    period_prices = _select_close_prices(history, start_date, end_date)
+    daily_returns = period_prices.pct_change(fill_method=None).dropna()
+    if len(daily_returns) < 2:
+        return None
+
+    annualized_volatility = (
+        daily_returns.std(ddof=1) * TRADING_DAYS_PER_YEAR**0.5 * 100.0
+    )
+    if pd.isna(annualized_volatility):
+        return None
+    return float(annualized_volatility)
+
+
+def calculate_price_max_drawdown(
+    history: pd.DataFrame,
+    start_date: object,
+    end_date: object,
+) -> float | None:
+    """Return peak-to-trough close-price drawdown as a percentage."""
+    period_prices = _select_close_prices(history, start_date, end_date)
+    if len(period_prices) < 2:
+        return None
+
+    drawdown = period_prices / period_prices.cummax() - 1.0
+    return float(drawdown.min()) * 100.0
+
+
+def calculate_return_max_drawdown(daily_returns: pd.Series) -> float | None:
+    """Return max drawdown from daily returns, including a base value of one."""
+    returns = pd.to_numeric(daily_returns, errors="coerce").dropna().astype(float)
+    if returns.empty:
+        return None
+
+    cumulative_return = (1.0 + returns).cumprod()
+    cumulative_return = pd.concat(
+        [pd.Series([1.0]), cumulative_return.reset_index(drop=True)],
+        ignore_index=True,
+    )
+    drawdown = cumulative_return / cumulative_return.cummax() - 1.0
+    return float(drawdown.min()) * 100.0
+
+
+def build_performance_percentile_records(
+    asset_metrics: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Rank return, drawdown, and volatility so a higher percentile is better."""
+    if not asset_metrics:
+        return []
+
+    comparison = pd.DataFrame(asset_metrics)
+    required_columns = {
+        "asset",
+        "cumulative_return_pct",
+        "ytd_max_drawdown_pct",
+        "annualized_volatility_pct",
+    }
+    if not required_columns.issubset(comparison.columns):
+        return []
+
+    metric_specs = [
+        ("cumulative_return_pct", "期间累计回报", True),
+        ("ytd_max_drawdown_pct", "今年最大回撤", True),
+        ("annualized_volatility_pct", "年化波动率", False),
+    ]
+    records: list[dict[str, object]] = []
+    for metric_key, metric_name, higher_is_better in metric_specs:
+        values = pd.to_numeric(comparison[metric_key], errors="coerce")
+        valid_values = values.dropna()
+        if valid_values.empty:
+            continue
+
+        percentiles = valid_values.rank(
+            method="average",
+            pct=True,
+            ascending=higher_is_better,
+        ) * 100.0
+        ranks = valid_values.rank(
+            method="min",
+            ascending=not higher_is_better,
+        ).astype(int)
+        universe_size = len(valid_values)
+        for row_index in valid_values.index:
+            asset = str(comparison.at[row_index, "asset"])
+            records.append(
+                {
+                    "asset": asset,
+                    "metric": metric_name,
+                    "metric_key": metric_key,
+                    "value_pct": float(valid_values.at[row_index]),
+                    "percentile": float(percentiles.at[row_index]),
+                    "rank": int(ranks.at[row_index]),
+                    "universe_size": universe_size,
+                    "is_portfolio": asset == "Portfolio",
+                }
+            )
+
+    return records
+
+
+def calculate_cumulative_contribution(
+    start_date_str,
+    end_date_str,
+    data_source='ALL',
+    print_daily_table=True,
+):
     """计算指定日期范围内的累计贡献度和盈亏"""
     try:
         # 转换日期格式
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-        date_range = pd.date_range(start=start_date, end=end_date)
+        year_start = end_date.replace(month=1, day=1)
+        pnl_date_range = pd.date_range(start=min(start_date, year_start), end=end_date)
 
         # 设置文件路径
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1071,6 +1358,7 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         # 存储所有日期的数据
         all_daily_data = []
         daily_strategy_data = []
+        portfolio_ytd_returns = []
 
         # 定义指数列表
         indices = {
@@ -1110,35 +1398,58 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         
         # 计算指数累计回报率
         index_returns = {}
+        index_ytd_max_drawdowns = {}
+        index_annualized_volatilities = {}
         sp500_hist_data = pd.DataFrame()
         nasdaq_hist_data = pd.DataFrame()
         for index_name, ticker in indices.items():
             try:
                 index = yf.Ticker(ticker)
-                hist_data = index.history(start=start_date - pd.Timedelta(days=1), end=end_date + pd.Timedelta(days=1))
+                hist_data = index.history(
+                    start=min(start_date, year_start) - pd.Timedelta(days=1),
+                    end=end_date + pd.Timedelta(days=1),
+                )
                 if index_name == "S&P 500":
                     sp500_hist_data = hist_data.copy()
                 if index_name == "Nasdaq 100":
                     nasdaq_hist_data = hist_data.copy()
-                
-                if len(hist_data.index) >= 2:
-                    start_price = float(hist_data.loc[hist_data.index[0], 'Close'])
-                    end_price = float(hist_data.loc[hist_data.index[-1], 'Close'])
+
+                selected_index_prices = _select_close_prices(
+                    hist_data,
+                    start_date - pd.Timedelta(days=1),
+                    end_date,
+                )
+                if len(selected_index_prices) >= 2:
+                    start_price = float(selected_index_prices.iloc[0])
+                    end_price = float(selected_index_prices.iloc[-1])
                     total_return = ((end_price / start_price) - 1) * 100
                     index_returns[index_name] = total_return
                 else:
                     index_returns[index_name] = None
+                index_ytd_max_drawdowns[index_name] = calculate_price_max_drawdown(
+                    hist_data,
+                    year_start,
+                    end_date,
+                )
+                index_annualized_volatilities[index_name] = (
+                    calculate_annualized_close_volatility(
+                        hist_data,
+                        start_date,
+                        end_date,
+                    )
+                )
             except Exception as e:
                 print(f"获取{index_name}指数数据时发生错误: {e}")
                 index_returns[index_name] = None
+                index_ytd_max_drawdowns[index_name] = None
+                index_annualized_volatilities[index_name] = None
+
+        sp500_daily_returns_bps = build_daily_close_return_bps(sp500_hist_data)
+        nasdaq_daily_returns_bps = build_daily_close_return_bps(nasdaq_hist_data)
 
         print(f"\n{start_date_str}至{end_date_str}的盈亏分析:")
-        print("-" * 120)
-        print(f"{'日期':<12} {'当日贡献度(bps)':>15} {'当日总盈亏(GBP)':>15} {'当日外汇盈亏(GBP)':>15} "
-              f"{'当日非外汇盈亏(GBP)':>15} {'当日总市值(GBP)':>15}")
-        print("-" * 120)
 
-        for date in date_range:
+        for date in pnl_date_range:
             formatted_date = date.strftime('%Y%m%d')
 
             # 构建文件名
@@ -1154,12 +1465,29 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
                     daily_pnl_result = pickle.load(f)
 
                 if daily_pnl_result['total_market_value'] != 0:
+                    daily_return = (
+                        daily_pnl_result['total_daily_pnl']
+                        / daily_pnl_result['total_market_value']
+                    )
+                    if date >= year_start:
+                        portfolio_ytd_returns.append(daily_return)
+                    if date < start_date:
+                        continue
+
                     contribution = (daily_pnl_result['total_daily_pnl'] / daily_pnl_result[
                         'total_market_value']) * 10000
                     daily_contributions.append(contribution)
                     fx_contribution = (daily_pnl_result['total_fx_pnl'] / daily_pnl_result[
                         'total_market_value']) * 10000
                     daily_fx_contributions.append(fx_contribution)
+                    sp500_contribution = _daily_index_contribution_bps(
+                        sp500_daily_returns_bps,
+                        date,
+                    )
+                    nasdaq_contribution = _daily_index_contribution_bps(
+                        nasdaq_daily_returns_bps,
+                        date,
+                    )
 
                     # 累计盈亏
                     total_pnl += daily_pnl_result['total_daily_pnl']
@@ -1171,6 +1499,8 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
                         'date': date,
                         'contribution': contribution,
                         'fx_contribution': fx_contribution,
+                        'sp500_contribution': sp500_contribution,
+                        'nasdaq_contribution': nasdaq_contribution,
                         'total_daily_pnl': daily_pnl_result['total_daily_pnl'],
                         'total_fx_pnl': daily_pnl_result['total_fx_pnl'],
                         'total_non_fx_pnl': daily_pnl_result['total_non_fx_pnl'],
@@ -1201,14 +1531,10 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
         recent_data = all_daily_data[-10:] if len(all_daily_data) > 10 else all_daily_data
         
         # 打印最近10天的数据
-        for data in recent_data:
-            print(f"{data['date'].strftime('%Y-%m-%d'):<12} {data['contribution']:>15,.2f} "
-                  f"{data['total_daily_pnl']:>15,.2f} "
-                  f"{data['total_fx_pnl']:>20,.2f} "
-                  f"{data['total_non_fx_pnl']:>20,.2f} "
-                  f"{data['total_market_value']:>20,.2f}")
-
-        print("-" * 120)
+        if print_daily_table:
+            print(format_daily_contribution_table(recent_data))
+        else:
+            print("日度盈亏分析表已在下方以结构化表格显示。")
         if daily_contributions:
             cumulative_contribution = sum(daily_contributions)
             cumulative_fx_contribution = sum(daily_fx_contributions)
@@ -1220,6 +1546,21 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             annualization_factor = (len(all_daily_data) / T) ** 0.5
             annualized_contribution_vol = contribution_series.std() * annualization_factor * 100
             annualized_fx_contribution_vol = fx_contribution_series.std() * annualization_factor * 100
+            annualized_sp500_vol = calculate_annualized_close_volatility(
+                sp500_hist_data,
+                start_date,
+                end_date,
+            )
+            annualized_nasdaq_vol = calculate_annualized_close_volatility(
+                nasdaq_hist_data,
+                start_date,
+                end_date,
+            )
+            portfolio_ytd_max_drawdown = calculate_return_max_drawdown(
+                pd.Series(portfolio_ytd_returns, dtype=float)
+            )
+            sp500_ytd_max_drawdown = index_ytd_max_drawdowns.get("S&P 500")
+            nasdaq_ytd_max_drawdown = index_ytd_max_drawdowns.get("Nasdaq 100")
 
             contribution_plot_data = pd.DataFrame(all_daily_data).sort_values('date')
             contribution_plot_data['cumulative_return'] = (1 + contribution_plot_data['contribution'] / 10000).cumprod()
@@ -1309,29 +1650,157 @@ def calculate_cumulative_contribution(start_date_str, end_date_str, data_source=
             plt.show()
 
             print(f"\n汇总信息:")
-            print("-" * 80)
-            print(f"期间累计总贡献度: {cumulative_contribution:>15,.2f} bps")
-            print(f"年化总贡献度: {annualized_return:>15,.2f}%")
-            print(f"年化总贡献度波动率: {annualized_contribution_vol:>10,.2f}%")
-            print(f"年化外汇贡献度波动率: {annualized_fx_contribution_vol:>8,.2f}%")
-            print(f"期间外汇累计贡献度: {cumulative_fx_contribution:>12,.2f} bps")
-            print(f"期间非外汇累计贡献度: {cumulative_contribution - cumulative_fx_contribution:>12,.2f} bps")
-            print(f"期间总盈亏: {total_pnl:>20,.2f} GBP")
-            print(f"期间外汇盈亏: {total_fx_pnl:>18,.2f} GBP")
-            print(f"期间盈亏: {total_pnl - total_fx_pnl:>18,.2f} GBP")
-            print("-" * 80)
+            report_width = 105
+            sp500_vol_display = (
+                f"{annualized_sp500_vol:,.2f}%"
+                if annualized_sp500_vol is not None
+                else "N/A"
+            )
+            nasdaq_vol_display = (
+                f"{annualized_nasdaq_vol:,.2f}%"
+                if annualized_nasdaq_vol is not None
+                else "N/A"
+            )
+            portfolio_drawdown_display = (
+                f"{portfolio_ytd_max_drawdown:,.2f}%"
+                if portfolio_ytd_max_drawdown is not None
+                else "N/A"
+            )
+            sp500_drawdown_display = (
+                f"{sp500_ytd_max_drawdown:,.2f}%"
+                if sp500_ytd_max_drawdown is not None
+                else "N/A"
+            )
+            nasdaq_drawdown_display = (
+                f"{nasdaq_ytd_max_drawdown:,.2f}%"
+                if nasdaq_ytd_max_drawdown is not None
+                else "N/A"
+            )
+
+            annualized_metric_rows = [
+                ["年化总贡献度:", f"{annualized_return:,.2f}%"],
+                ["年化总贡献度波动率:", f"{annualized_contribution_vol:,.2f}%"],
+                ["年化外汇贡献度波动率:", f"{annualized_fx_contribution_vol:,.2f}%"],
+                ["S&P 500年化波动率:", sp500_vol_display],
+                ["NASDAQ年化波动率:", nasdaq_vol_display],
+                ["Portfolio今年最大回撤:", portfolio_drawdown_display],
+                ["S&P 500今年最大回撤:", sp500_drawdown_display],
+                ["NASDAQ今年最大回撤:", nasdaq_drawdown_display],
+            ]
+            print("-" * report_width)
+            print("年化指标:")
+            print(
+                tabulate(
+                    annualized_metric_rows,
+                    tablefmt="plain",
+                    colalign=("left", "right"),
+                    disable_numparse=True,
+                )
+            )
+            print("-" * report_width)
+            print("期间累计指标:")
+            cumulative_metric_rows = [
+                ["期间累计总贡献度:", f"{cumulative_contribution:,.2f} bps"],
+                ["期间外汇累计贡献度:", f"{cumulative_fx_contribution:,.2f} bps"],
+                [
+                    "期间非外汇累计贡献度:",
+                    f"{cumulative_contribution - cumulative_fx_contribution:,.2f} bps",
+                ],
+                ["期间总盈亏:", f"{total_pnl:,.2f} GBP"],
+                ["期间外汇盈亏:", f"{total_fx_pnl:,.2f} GBP"],
+                ["期间盈亏:", f"{total_pnl - total_fx_pnl:,.2f} GBP"],
+            ]
+            print(
+                tabulate(
+                    cumulative_metric_rows,
+                    tablefmt="plain",
+                    colalign=("left", "right"),
+                    disable_numparse=True,
+                )
+            )
+            print("-" * report_width)
             
             # 打印指数累计回报率
             print("\n全球主要指数累计回报率:")
-            print("-" * 80)
-            print(f"{'指数名称':<30} {'累计回报率(%)':>15}")
-            print("-" * 80)
+            print("-" * 105)
+            print(
+                f"{'指数名称':<30} {'累计回报率(%)':>15} "
+                f"{'今年最大回撤(%)':>18} {'年化波动率(%)':>18}"
+            )
+            print("-" * 105)
             for index_name, return_rate in sorted(index_returns.items(), key=lambda x: x[1] if x[1] is not None else float('-inf'), reverse=True):
+                max_drawdown = index_ytd_max_drawdowns.get(index_name)
+                annualized_volatility = index_annualized_volatilities.get(index_name)
+                max_drawdown_display = (
+                    f"{max_drawdown:,.2f}"
+                    if max_drawdown is not None
+                    else "N/A"
+                )
+                volatility_display = (
+                    f"{annualized_volatility:,.2f}"
+                    if annualized_volatility is not None
+                    else "N/A"
+                )
                 if return_rate is not None:
-                    print(f"{index_name:<30} {return_rate:>15,.2f}")
+                    print(
+                        f"{index_name:<30} {return_rate:>15,.2f} "
+                        f"{max_drawdown_display:>18} {volatility_display:>18}"
+                    )
                 else:
-                    print(f"{index_name:<30} {'N/A':>15}")
-            print("-" * 80)
+                    print(
+                        f"{index_name:<30} {'N/A':>15} "
+                        f"{max_drawdown_display:>18} {volatility_display:>18}"
+                    )
+            print("-" * 105)
+
+            comparison_metrics = [
+                {
+                    "asset": "Portfolio",
+                    "cumulative_return_pct": cumulative_contribution / 100.0,
+                    "ytd_max_drawdown_pct": portfolio_ytd_max_drawdown,
+                    "annualized_volatility_pct": annualized_contribution_vol,
+                }
+            ]
+            comparison_metrics.extend(
+                {
+                    "asset": index_name,
+                    "cumulative_return_pct": index_returns.get(index_name),
+                    "ytd_max_drawdown_pct": index_ytd_max_drawdowns.get(index_name),
+                    "annualized_volatility_pct": (
+                        index_annualized_volatilities.get(index_name)
+                    ),
+                }
+                for index_name in indices
+            )
+            percentile_records = build_performance_percentile_records(
+                comparison_metrics
+            )
+            portfolio_percentiles = [
+                record
+                for record in percentile_records
+                if record["is_portfolio"]
+            ]
+            if portfolio_percentiles:
+                print("\nPortfolio全球主要指数Percentile排名:")
+                print("-" * 80)
+                print(
+                    f"{'指标':<20} {'实际值(%)':>15} "
+                    f"{'Percentile':>15} {'排名':>12}"
+                )
+                print("-" * 80)
+                for record in portfolio_percentiles:
+                    print(
+                        f"{record['metric']:<20} "
+                        f"{record['value_pct']:>15,.2f} "
+                        f"{record['percentile']:>14,.1f}% "
+                        f"{record['rank']:>4}/{record['universe_size']}"
+                    )
+                print("-" * 80)
+
+            return {
+                "percentile_comparison": percentile_records,
+                "daily_contribution_rows": recent_data,
+            }
         else:
             print("在指定日期范围内没有找到数据")
 

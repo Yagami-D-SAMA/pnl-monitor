@@ -5,6 +5,34 @@ This file records substantial project changes. Add new entries under
 
 ## Unreleased
 ### Portfolio Analysis
+- 2026-08-17: Extended the global-index cumulative-return table with selected-
+  period annualized volatility. Added an interactive percentile heatmap that
+  compares Portfolio with the global indices across period cumulative return,
+  calendar-YTD maximum drawdown, and annualized volatility. Higher percentiles
+  consistently mean better outcomes: higher return, shallower drawdown, and
+  lower volatility. Portfolio is highlighted and each cell exposes actual
+  value, percentile, and rank. Validation: focused offline tests, syntax and
+  whitespace checks, and a live Streamlit workflow smoke test.
+
+- 2026-08-17: Added annualized S&P 500 and NASDAQ volatility beneath FX
+  contribution volatility in the cumulative-contribution summary. Both use
+  close-to-close daily returns over the selected period and 252-day
+  annualization; unavailable or insufficient index data is displayed as `N/A`.
+  The summary is grouped into annualized metrics followed by period cumulative
+  contribution and PnL metrics. The annualized section now also shows calendar
+  YTD maximum drawdown for the Portfolio, S&P 500, and NASDAQ; the global-index
+  comparison table includes the same YTD maximum-drawdown column for every
+  index.
+
+- 2026-08-16: Optimized the portfolio drawdown monitor by replacing sequential
+  per-ticker Yahoo history and info requests with one threaded yfinance batch
+  download for all current positions. The same in-memory adjusted-close data
+  now supports lookback drawdowns, selected price-distribution charts, and
+  as-of-date 52-week ranges. Chart definitions and the selected-lookback price
+  standard-deviation marker are unchanged; no investment or PnL data is
+  written. Validation: offline drawdown tests and a live before/after timing
+  benchmark using representative US and LSE holdings.
+
 - 2026-08-12: Extended historical annual-return analysis with a Portfolio
   annual summary showing total PnL in GBP for each selected year. Comparison
   metrics now include annualized Sharpe ratio. The risk-free rate is the mean

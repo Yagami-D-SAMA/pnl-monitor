@@ -86,8 +86,9 @@ if __name__ == "__main__":
     # todo ETF price comparison
     # todo China US EU PMI/CPI/Macro data analysis
     # todo N/A, need to re calculate price
-    # todo  daily run
-    run_portfolio_daily_workflow(data_source='ALL', asset_type=True)
+    # todo 2026-08-28 daily run
+    # run_portfolio_daily_workflow(data_source='ALL', asset_type=True)
+    analyze_portfolio('2026-08-26',data_source='ALL', asset_type=True)
     # stock_monitor(90)
     # run_portfolio_drawdown_monitor(
     #     running_date=None, lookback_period=90, data_source='ALL', selected_security='GOOG'
@@ -97,8 +98,8 @@ if __name__ == "__main__":
     # analyze_portfolio_industry_percentiles()
     # stock_value_factor()
     # 3. 查看历史PnL
-    # load_historical_pnl('2026-07-14', data_source='ALL')
+    # load_historical_pnl('2025-12-16', data_source='ALL')
     # 4. 计算累计贡献度
-    # calculate_cumulative_contribution('2026-01-01', '2026-07-14', data_source='ALL')
+    # calculate_cumulative_contribution('2026-08-01', '2026-08-18', data_source='ALL')
     # 5. 运行历史分析
     # run_historical_analysis('2022-11-01', '2022-12-29')

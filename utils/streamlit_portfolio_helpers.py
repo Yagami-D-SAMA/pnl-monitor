@@ -486,6 +486,14 @@ def build_cumulative_return_chart_data(figure: object) -> dict[str, object] | No
 
 def display_cumulative_return_chart(chart_data: dict[str, object]) -> None:
     """Display cumulative series with a shared tooltip and vertical crosshair."""
+    chart_type = chart_data.get("chart_type")
+    if chart_type == "daily_contribution_table":
+        display_daily_contribution_table(chart_data)
+        return
+    if chart_type == "percentile_comparison":
+        display_performance_percentile_chart(chart_data)
+        return
+
     import altair as alt
 
     records = chart_data.get("records", [])
@@ -660,6 +668,159 @@ def display_cumulative_return_chart(chart_data: dict[str, object]) -> None:
     st.altair_chart(chart, use_container_width=True)
 
 
+def build_daily_contribution_display_frame(
+    records: list[dict[str, object]],
+) -> pd.DataFrame:
+    """Build the browser-rendered daily contribution table."""
+    columns = {
+        "date": "日期",
+        "contribution": "当日贡献度(bps)",
+        "sp500_contribution": "当日贡献度 SPX(bps)",
+        "nasdaq_contribution": "当日贡献度 NASDAQ(bps)",
+        "total_daily_pnl": "当日总盈亏(GBP)",
+        "total_fx_pnl": "当日外汇盈亏(GBP)",
+        "total_non_fx_pnl": "当日非外汇盈亏(GBP)",
+        "total_market_value": "当日总市值(GBP)",
+    }
+    if not records:
+        return pd.DataFrame(columns=list(columns.values()))
+
+    frame = pd.DataFrame(records).reindex(columns=list(columns))
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    for column in list(columns)[1:]:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame.rename(columns=columns)
+
+
+def display_daily_contribution_table(chart_data: dict[str, object]) -> None:
+    """Render daily contribution records using Streamlit's native grid layout."""
+    records = chart_data.get("records", [])
+    frame = build_daily_contribution_display_frame(records)
+    if frame.empty:
+        return
+
+    st.markdown(f"### {chart_data.get('title', '日度盈亏分析')}")
+    numeric_columns = list(frame.columns[1:])
+    column_config = {
+        "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD"),
+        **{
+            column: st.column_config.NumberColumn(column, format="%,.2f")
+            for column in numeric_columns
+        },
+    }
+    st.dataframe(
+        frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config,
+    )
+
+
+def display_performance_percentile_chart(
+    chart_data: dict[str, object],
+) -> None:
+    """Display portfolio and index performance percentiles as a heatmap."""
+    import altair as alt
+
+    records = chart_data.get("records", [])
+    comparison = pd.DataFrame(records)
+    required_columns = {
+        "asset",
+        "metric",
+        "value_pct",
+        "percentile",
+        "rank",
+        "universe_size",
+        "is_portfolio",
+    }
+    if comparison.empty or not required_columns.issubset(comparison.columns):
+        return
+
+    numeric_columns = ["value_pct", "percentile", "rank", "universe_size"]
+    for column in numeric_columns:
+        comparison[column] = pd.to_numeric(comparison[column], errors="coerce")
+    comparison = comparison.dropna(subset=numeric_columns)
+    if comparison.empty:
+        return
+
+    comparison["cell_label"] = comparison.apply(
+        lambda row: f"{row['percentile']:.0f} | #{int(row['rank'])}",
+        axis=1,
+    )
+    metric_order = ["期间累计回报", "今年最大回撤", "年化波动率"]
+    asset_scores = (
+        comparison.groupby("asset", sort=False)["percentile"].mean().sort_values(
+            ascending=False
+        )
+    )
+    asset_order = ["Portfolio"] if "Portfolio" in asset_scores.index else []
+    asset_order.extend(
+        asset for asset in asset_scores.index if asset != "Portfolio"
+    )
+
+    base = alt.Chart(comparison).encode(
+        x=alt.X(
+            "metric:N",
+            title=None,
+            sort=metric_order,
+            axis=alt.Axis(labelAngle=0, labelPadding=8),
+        ),
+        y=alt.Y(
+            "asset:N",
+            title=None,
+            sort=asset_order,
+            axis=alt.Axis(labelLimit=260),
+        ),
+    )
+    heatmap = base.mark_rect(cornerRadius=2).encode(
+        color=alt.Color(
+            "percentile:Q",
+            title="Percentile",
+            scale=alt.Scale(
+                domain=[0, 50, 100],
+                range=["#b91c1c", "#f59e0b", "#15803d"],
+            ),
+        ),
+        tooltip=[
+            alt.Tooltip("asset:N", title="Asset"),
+            alt.Tooltip("metric:N", title="Metric"),
+            alt.Tooltip("value_pct:Q", title="Actual (%)", format=".2f"),
+            alt.Tooltip("percentile:Q", title="Percentile", format=".1f"),
+            alt.Tooltip("rank:Q", title="Rank", format=".0f"),
+            alt.Tooltip("universe_size:Q", title="Universe", format=".0f"),
+        ],
+    )
+    labels = base.mark_text(fontSize=12, fontWeight="bold").encode(
+        text=alt.Text("cell_label:N"),
+        color=alt.condition(
+            "datum.percentile >= 65 || datum.percentile <= 30",
+            alt.value("white"),
+            alt.value("#111827"),
+        ),
+    )
+    portfolio_outline = (
+        base.transform_filter("datum.is_portfolio")
+        .mark_rect(fillOpacity=0, stroke="#38bdf8", strokeWidth=3)
+    )
+    chart = (
+        alt.layer(heatmap, portfolio_outline, labels)
+        .properties(
+            title=(
+                "Portfolio vs Global Indices Percentile Comparison "
+                "(higher = better)"
+            ),
+            height=max(360, len(asset_order) * 31),
+        )
+        .configure_axis(grid=False)
+        .configure_view(strokeWidth=0)
+    )
+    st.caption(
+        "累计回报越高、最大回撤越接近0、年化波动率越低，Percentile越高。"
+        "单元格显示 Percentile | 排名；Portfolio 使用蓝色边框突出。"
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
 def extract_market_value_messages(output: str) -> list[str]:
     """Pull calculation warnings from captured calculate_market_values output."""
     if not output:
@@ -709,11 +870,20 @@ def display_market_value_messages(output: str) -> None:
             st.info(message)
 
 
-def build_number_column_config(df: pd.DataFrame, percent_columns: set[str] | None = None) -> dict:
+def build_number_column_config(
+    df: pd.DataFrame,
+    percent_columns: set[str] | None = None,
+    number_formats: dict[str, str] | None = None,
+) -> dict:
     percent_columns = percent_columns or set()
+    number_formats = number_formats or {}
     column_config = {}
     for column in df.columns:
-        if column in percent_columns:
+        if column in number_formats and pd.api.types.is_numeric_dtype(df[column]):
+            column_config[column] = st.column_config.NumberColumn(
+                format=number_formats[column]
+            )
+        elif column in percent_columns:
             column_config[column] = st.column_config.NumberColumn(format="%.2f%%")
         elif pd.api.types.is_numeric_dtype(df[column]):
             column_config[column] = st.column_config.NumberColumn(format="%,.2f")
@@ -852,13 +1022,24 @@ def display_holdings_tables(analysis_result: object) -> None:
         "Holding Days": "持有天数",
         "Cumulative Dividend GBP": "累计分红",
     })
-    for column in ["成本(GBP)", "累计盈亏(GBP)", "累计外汇损益(GBP)", "当前市值(GBP)", "累计分红"]:
-        overview_display_df[column] = overview_display_df[column].map(lambda value: format_value_with_unit(value, "GBP"))
-    for column in ["当前价格(LC)", "平均买入价格(LC)"]:
-        overview_display_df[column] = overview_display_df[column].map(format_plain_number)
-    overview_display_df["持有天数"] = overview_display_df["持有天数"].map(lambda value: format_integer_with_unit(value, "days"))
-    for column in ["累计独立损益(%)", "累计外汇损益(%)", "市值占比(%)"]:
-        overview_display_df[column] = overview_display_df[column].map(format_percent_number)
+    overview_number_formats = {
+        "当前持仓": "%,.0f",
+        "当前价格(LC)": "%,.2f",
+        "平均买入价格(LC)": "%,.2f",
+        "成本(GBP)": "%,.2fGBP",
+        "累计独立损益(%)": "%.2f%%",
+        "累计盈亏(GBP)": "%,.2fGBP",
+        "累计外汇损益(%)": "%.2f%%",
+        "累计外汇损益(GBP)": "%,.2fGBP",
+        "当前市值(GBP)": "%,.2fGBP",
+        "市值占比(%)": "%.2f%%",
+        "持有天数": "%,.0fdays",
+        "累计分红": "%,.2fGBP",
+    }
+    for column in overview_number_formats:
+        overview_display_df[column] = pd.to_numeric(
+            overview_display_df[column], errors="coerce"
+        )
 
     strategy_display_df = strategy_holdings_df.copy()
     for column in percent_columns:
@@ -877,11 +1058,15 @@ def display_holdings_tables(analysis_result: object) -> None:
         "Holding Days": "持有天数",
         "Cumulative Dividend GBP": "累计分红",
     })
-    for column in ["成本(GBP)", "累计盈亏(GBP)", "累计外汇损益(GBP)", "当前市值(GBP)", "累计分红"]:
-        strategy_display_df[column] = strategy_display_df[column].map(lambda value: format_value_with_unit(value, "GBP"))
-    strategy_display_df["持有天数"] = strategy_display_df["持有天数"].map(lambda value: format_integer_with_unit(value, "days"))
-    for column in ["累计独立损益(%)", "累计外汇损益(%)", "市值占比(%)"]:
-        strategy_display_df[column] = strategy_display_df[column].map(format_percent_number)
+    strategy_number_formats = {
+        column: number_format
+        for column, number_format in overview_number_formats.items()
+        if column not in {"当前价格(LC)", "平均买入价格(LC)"}
+    }
+    for column in strategy_number_formats:
+        strategy_display_df[column] = pd.to_numeric(
+            strategy_display_df[column], errors="coerce"
+        )
     daily_display_df = display_df[daily_columns].rename(columns={
         "Market": "市场",
         "Position": "当前持仓",
@@ -893,11 +1078,19 @@ def display_holdings_tables(analysis_result: object) -> None:
         "Daily FX PnL bps": "当日外汇盈亏占比(bps)",
     })
     daily_display_df = daily_display_df.sort_values("当日盈亏金额(GBP)", ascending=False, na_position="last")
-    for column in ["当日盈亏(bps)", "盈亏占比(bps)", "当日外汇盈亏占比(bps)"]:
-        daily_display_df[column] = daily_display_df[column].map(lambda value: format_value_with_unit(value, "bps"))
-    daily_display_df["当日价格变动(LC)"] = daily_display_df["当日价格变动(LC)"].map(format_plain_number)
-    for column in ["当日盈亏金额(GBP)", "当日外汇盈亏金额(GBP)"]:
-        daily_display_df[column] = daily_display_df[column].map(lambda value: format_value_with_unit(value, "GBP"))
+    daily_number_formats = {
+        "当前持仓": "%,.0f",
+        "当日盈亏(bps)": "%,.2fbps",
+        "当日价格变动(LC)": "%,.2f",
+        "当日盈亏金额(GBP)": "%,.2fGBP",
+        "盈亏占比(bps)": "%,.2fbps",
+        "当日外汇盈亏金额(GBP)": "%,.2fGBP",
+        "当日外汇盈亏占比(bps)": "%,.2fbps",
+    }
+    for column in daily_number_formats:
+        daily_display_df[column] = pd.to_numeric(
+            daily_display_df[column], errors="coerce"
+        )
 
     classification_display_df = display_df[classification_columns].rename(columns={
         "Market": "当前市场",
@@ -915,18 +1108,30 @@ def display_holdings_tables(analysis_result: object) -> None:
             overview_display_df,
             use_container_width=True,
             hide_index=True,
+            column_config=build_number_column_config(
+                overview_display_df,
+                number_formats=overview_number_formats,
+            ),
         )
     with strategy_tab:
         st.dataframe(
             strategy_display_df,
             use_container_width=True,
             hide_index=True,
+            column_config=build_number_column_config(
+                strategy_display_df,
+                number_formats=strategy_number_formats,
+            ),
         )
     with daily_tab:
         st.dataframe(
             daily_display_df,
             use_container_width=True,
             hide_index=True,
+            column_config=build_number_column_config(
+                daily_display_df,
+                number_formats=daily_number_formats,
+            ),
         )
     with classification_tab:
         st.dataframe(
@@ -1136,6 +1341,7 @@ def run_followup_step(
     buffer = StringIO()
     images: list[bytes] = []
     cumulative_charts: list[dict[str, object]] = []
+    cumulative_result: dict[str, object] | None = None
     try:
         import matplotlib.pyplot as plt
 
@@ -1169,10 +1375,11 @@ def run_followup_step(
                     data_source=data_source,
                 )
             elif step_name == "calculate_cumulative_contribution":
-                calculate_cumulative_contribution(
+                cumulative_result = calculate_cumulative_contribution(
                     cumulative_start_date.strftime("%Y-%m-%d"),
                     cumulative_end_date.strftime("%Y-%m-%d"),
                     data_source=data_source,
+                    print_daily_table=False,
                 )
             else:
                 raise ValueError(f"Unknown follow-up step: {step_name}")
@@ -1188,6 +1395,31 @@ def run_followup_step(
             figure.savefig(image_buffer, format="png", bbox_inches="tight")
             image_buffer.seek(0)
             images.append(image_buffer.getvalue())
+        if step_name == "calculate_cumulative_contribution" and cumulative_result:
+            daily_contribution_rows = cumulative_result.get(
+                "daily_contribution_rows",
+                [],
+            )
+            if daily_contribution_rows:
+                cumulative_charts.insert(
+                    0,
+                    {
+                        "chart_type": "daily_contribution_table",
+                        "title": (
+                            f"{cumulative_start_date:%Y-%m-%d}至"
+                            f"{cumulative_end_date:%Y-%m-%d}的盈亏分析"
+                        ),
+                        "records": daily_contribution_rows,
+                    },
+                )
+            percentile_records = cumulative_result.get("percentile_comparison", [])
+            if percentile_records:
+                cumulative_charts.append(
+                    {
+                        "chart_type": "percentile_comparison",
+                        "records": percentile_records,
+                    }
+                )
         plt.close("all")
         return 0, buffer.getvalue(), images, cumulative_charts
     except Exception as exc:

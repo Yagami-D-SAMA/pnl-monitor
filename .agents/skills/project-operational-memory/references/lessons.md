@@ -8,22 +8,28 @@
   and names a missing or inaccessible base interpreter, or a guessed Python
   runtime lacks project packages such as pandas, tabulate, or Streamlit.
 - Confirmed cause: The project packages and IDE runtime are exposed through the
-  repository virtual environment. Sandbox execution can fail to launch its base
-  interpreter even when the same virtual environment works in the IDE.
+  repository virtual environment. Its launcher depends on the base interpreter
+  at `C:\Users\steve\AppData\Local\Programs\Python\Python312\python.exe`.
+  That executable exists, but the default sandbox can deny access to it even
+  though the same virtual environment works in the IDE and outside the sandbox.
 - Prevention: Use this interpreter first and do not guess another path:
   `C:\Users\steve\OneDrive\Python Project\Yikai Code\venv\Scripts\python.exe`.
   In PowerShell, invoke it with the call operator:
-  `& '.\venv\Scripts\python.exe' <arguments>`.
-- Recovery: First confirm the file exists. If the sandbox reports access denied
-  or cannot create the base process, rerun the same virtual-environment command
-  with sandbox escalation. Do not declare the environment broken and do not
-  switch to an AppData or bundled Python merely because the sandbox launch
-  failed. Use the Codex bundled Python only for an explicitly isolated,
-  standard-library-only check and report that limitation.
-- Verification: Run `& '.\venv\Scripts\python.exe' --version`, then import the
-  project dependency or module needed by the task. For module-path ambiguity,
-  print `module.__file__`.
-- Last confirmed: 2026-08-08
+  `& '.\venv\Scripts\python.exe' <arguments>`. For Codex tool calls, run this
+  exact interpreter with the approved sandbox-escalation rule on the first
+  attempt; do not spend an initial attempt running it inside the default
+  sandbox.
+- Recovery: If escalated execution also fails, confirm both the virtual-
+  environment launcher and base executable exist before diagnosing the
+  environment. Do not declare the environment broken and do not switch to an
+  AppData or bundled Python merely because a default-sandbox launch failed. Use
+  the Codex bundled Python only for an explicitly isolated, standard-library-
+  only check and report that limitation.
+- Verification: With sandbox escalation, run
+  `& '.\venv\Scripts\python.exe' --version`, then import the project dependency
+  or module needed by the task. For module-path ambiguity, print
+  `module.__file__`.
+- Last confirmed: 2026-08-16
 
 ## Restart stale Streamlit after helper-module changes
 
